@@ -1,6 +1,6 @@
 """
 Complete E-Commerce Admin Configuration for Multi-Tenant SaaS
-Super Admin can see ALL data across ALL tenants using .all_objects
+Super Admin can see ALL data across ALL tenants using .objects
 """
 from django.contrib import admin, messages
 from django.db.models import Count, Avg
@@ -26,9 +26,9 @@ class ProductImageInline(admin.TabularInline):
     verbose_name = "Product Image"
     verbose_name_plural = "Product Images (Gallery)"
     
-    # ✅ Use all_objects to ensure data loads regardless of tenant context
+    # ✅ Use objects to ensure data loads regardless of tenant context
     def get_queryset(self, request):
-        return self.model.all_objects.all()
+        return self.model.objects.all()
 
     def image_preview(self, obj):
         if obj.image_url:
@@ -49,9 +49,9 @@ class ProductVariantInline(admin.TabularInline):
     verbose_name = "Product Variant"
     verbose_name_plural = "Product Variants (Size/Color Options)"
 
-    # ✅ Use all_objects to ensure data loads regardless of tenant context
+    # ✅ Use objects to ensure data loads regardless of tenant context
     def get_queryset(self, request):
-        return self.model.all_objects.all()
+        return self.model.objects.all()
 
 
 # ============================================================================
@@ -144,7 +144,7 @@ class ProductAdmin(admin.ModelAdmin):
         }),
     )
     
-    # ✅ CRITICAL: Use all_objects to see ALL products across ALL tenants
+    # ✅ CRITICAL: Use objects to see ALL products across ALL tenants
     def get_queryset(self, request):
         qs = self.model.objects.all().select_related('tenant')
         # Add annotations for performance
@@ -253,9 +253,9 @@ class ProductVariantAdmin(admin.ModelAdmin):
     list_select_related = ['product', 'tenant']
     readonly_fields = ['created_at', 'updated_at']
     
-    # ✅ CRITICAL: Use all_objects to see ALL variants
+    # ✅ CRITICAL: Use objects to see ALL variants
     def get_queryset(self, request):
-        return self.model.all_objects.all().select_related('product', 'tenant')
+        return self.model.objects.all().select_related('product', 'tenant')
     
     def variant_display(self, obj):
         return obj.display_name
@@ -293,9 +293,9 @@ class ReviewAdmin(admin.ModelAdmin):
     actions = ['approve_reviews', 'unapprove_reviews']
     readonly_fields = ['created_at', 'updated_at']
     
-    # ✅ CRITICAL: Use all_objects
+    # ✅ CRITICAL: Use objects
     def get_queryset(self, request):
-        return self.model.all_objects.all().select_related('product', 'tenant')
+        return self.model.objects.all().select_related('product', 'tenant')
     
     def rating_stars(self, obj):
         return format_html('<span style="color: #f39c12;">{}</span>', '★' * obj.rating)
@@ -337,9 +337,9 @@ class DiscountAdmin(admin.ModelAdmin):
     search_fields = ['code', 'tenant__name']
     filter_horizontal = ['products']
     
-    # ✅ CRITICAL: Use all_objects
+    # ✅ CRITICAL: Use objects
     def get_queryset(self, request):
-        return self.model.all_objects.all().select_related('tenant')
+        return self.model.objects.all().select_related('tenant')
     
     def tenant_link(self, obj):
         url = reverse('admin:core_tenant_change', args=[obj.tenant.id])
