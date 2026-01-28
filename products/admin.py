@@ -8,6 +8,7 @@ from django.utils.html import format_html
 from django.utils import timezone
 from django.urls import reverse
 from .models import Product, ProductVariant, ProductImage, Review, Discount
+from django.utils.safestring import mark_safe
 
 
 # ============================================================================
@@ -218,12 +219,12 @@ class ProductAdmin(admin.ModelAdmin):
     
     def stock_status(self, obj):
         if not obj.track_inventory:
-            return format_html('<span style="color: #3498db;">∞ Unlimited</span>')
+            return mark_safe('<span style="color: #3498db;">∞ Unlimited</span>')
         
         if obj.stock <= 0:
             if obj.allow_backorders:
-                return format_html('<span style="color: #e67e22;">⚠ Backorder</span>')
-            return format_html('<span style="color: #e74c3c; font-weight: bold;">✗ Out of Stock</span>')
+                return mark_safe('<span style="color: #e67e22;">⚠ Backorder</span>')
+            return mark_safe('<span style="color: #e74c3c; font-weight: bold;">✗ Out of Stock</span>')
         elif obj.stock <= obj.low_stock_threshold:
             return format_html('<span style="color: #e67e22;">Low ({})</span>', obj.stock)
         else:
@@ -232,8 +233,8 @@ class ProductAdmin(admin.ModelAdmin):
     
     def status_badge(self, obj):
         if obj.is_active:
-            return format_html('<span style="background: #27ae60; color: white; padding: 2px 6px; border-radius: 3px;">Active</span>')
-        return format_html('<span style="background: #95a5a6; color: white; padding: 2px 6px; border-radius: 3px;">Inactive</span>')
+            return mark_safe('<span style="background: #27ae60; color: white; padding: 2px 6px; border-radius: 3px;">Active</span>')
+        return mark_safe('<span style="background: #95a5a6; color: white; padding: 2px 6px; border-radius: 3px;">Inactive</span>')
     status_badge.short_description = "Status"
     
     def variant_count_display(self, obj):
