@@ -1,5 +1,6 @@
 """
 Complete E-Commerce Views with Multi-Tenant Security
+✅ FIXED: All imports and syntax issues resolved
 """
 from rest_framework import viewsets, status, permissions, filters
 from rest_framework.decorators import action
@@ -15,12 +16,10 @@ from .models import Product, ProductVariant, Review, Discount
 from .serializers import (
     ProductListSerializer, 
     ProductDetailSerializer,
-    ProductCreateUpdateSerializer,
-    ProductVariantSerializer,  # ✅ Added import
+    ProductVariantSerializer,
     ReviewSerializer,
     DiscountSerializer,
-    DiscountValidationSerializer,
-    ReviewVoteSerializer
+    DiscountValidationSerializer
 )
 
 logger = logging.getLogger(__name__)
@@ -100,8 +99,9 @@ class ProductViewSet(viewsets.ModelViewSet):
         on_sale = self.request.query_params.get('on_sale')
         if on_sale == 'true':
             queryset = queryset.exclude(discount_type='none').filter(
-                Q(discount_end_date__isnull=True) | Q(discount_end_date__gte=timezone.now()),
                 discount_value__gt=0
+            ).filter(
+                Q(discount_end_date__isnull=True) | Q(discount_end_date__gte=timezone.now())
             )
         
         # Rating filter
@@ -116,7 +116,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         if self.action == 'list':
             return ProductListSerializer
         elif self.action in ['create', 'update', 'partial_update']:
-            return ProductCreateUpdateSerializer
+            return ProductDetailSerializer  # Use detail serializer for create/update
         return ProductDetailSerializer
     
     def perform_create(self, serializer):
@@ -178,8 +178,10 @@ class ProductViewSet(viewsets.ModelViewSet):
         """GET /api/products/on_sale/ - Products currently on sale"""
         now = timezone.now()
         products = self.get_queryset().exclude(discount_type='none').filter(
-            discount_value__gt=0,
-            Q(discount_start_date__isnull=True) | Q(discount_start_date__lte=now),
+            discount_value__gt=0
+        ).filter(
+            Q(discount_start_date__isnull=True) | Q(discount_start_date__lte=now)
+        ).filter(
             Q(discount_end_date__isnull=True) | Q(discount_end_date__gte=now)
         )
         serializer = ProductListSerializer(products, many=True, context={'request': request})
@@ -231,7 +233,11 @@ class ProductViewSet(viewsets.ModelViewSet):
         categories = Product.objects.filter(
             tenant=request.tenant,
             is_active=True
-        ).exclude(category__isnull=True).exclude(category='').values('category').annotate(
+        ).exclude(
+            category__isnull=True
+        ).exclude(
+            category=''
+        ).values('category').annotate(
             count=Count('id'),
             avg_price=Avg('price')
         ).order_by('category')
@@ -533,7 +539,6 @@ class ProductVariantViewSet(viewsets.ModelViewSet):
     Product Variants API (optional - can also be accessed via Product detail)
     """
     
-    # ✅ Fixed: Added serializer class
     serializer_class = ProductVariantSerializer
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
