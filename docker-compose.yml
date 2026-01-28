@@ -1,0 +1,77 @@
+version: "3.9"
+
+services:
+  # 1. Django Backend
+  backend:
+    build: .
+    container_name: backend
+    restart: unless-stopped
+    expose:
+      - "8000"
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY}
+      - DJANGO_DEBUG=${DJANGO_DEBUG}
+      - DJANGO_ALLOWED_HOSTS=${DJANGO_ALLOWED_HOSTS}
+      - DB_NAME=${DB_NAME}
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - REDIS_PASSWORD=${REDIS_PASSWORD} 
+      - DJANGO_LOG_LEVEL=${DJANGO_LOG_LEVEL:-INFO}
+      - GUNICORN_WORKERS=${GUNICORN_WORKERS:-3}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS}
+    env_file:
+      - .env
+    volumes:
+      - django_static:/app/staticfiles
+      - django_media:/app/media
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput &&
+             gunicorn backend.wsgi:application --bind 0.0.0.0:8000 
+             --workers ${GUNICORN_WORKERS:-3} 
+             --timeout 120 
+             --access-logfile - 
+             --error-logfile -"
+    networks:
+      - proxy_network
+
+  # 2. Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: saas_redis
+    restart: unless-stopped
+    # Starts Redis with the password from .env
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      # Checks if Redis is accepting connections
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    networks:
+      - proxy_network
+
+volumes:
+  django_static:
+  django_media:
+  redis_data:
+
+networks:
+  proxy_network:
+    external: true

@@ -1,0 +1,21 @@
+# .gitignore
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment variables (NEVER push these)
+.env
+.venv
+env/
+venv/
+
+# Database
+db.sqlite3
+
+# Static/Media
+staticfiles/
+media/
+
+# OS
+.DS_Store
+Thumbs.db
