@@ -166,24 +166,37 @@ class ProductAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         """Auto-assign tenant for non-superusers or use selected tenant for superusers"""
-        if not request.user.is_superuser or not obj.tenant:
+        # Checks if tenant is missing, then tries to get it from request
+        if not obj.tenant_id:
             obj.tenant = getattr(request, 'tenant', None)
         super().save_model(request, obj, form, change)
 
     def save_formset(self, request, form, formset, change):
         """Ensure Inlines (Variants/Images) also get the correct tenant"""
         instances = formset.save(commit=False)
+        
         for instance in instances:
+            # Check if this model requires a tenant
             if hasattr(instance, 'tenant'):
-                # FIX: Inherit the tenant from the parent Product (form.instance)
-                # This guarantees the image matches the product's store.
-                if form.instance.tenant:
-                    instance.tenant = form.instance.tenant
-                elif not instance.tenant:
-                    # Fallback to request only if parent has no tenant
-                    instance.tenant = getattr(request, 'tenant', None)
+                
+                # 1. Inherit directly from the Parent Product (Best Way)
+                if form.instance.tenant_id:
+                    instance.tenant_id = form.instance.tenant_id
+                
+                # 2. Fallback: Try to get tenant from the Request
+                elif not getattr(instance, 'tenant_id', None):
+                    tenant = getattr(request, 'tenant', None)
+                    if tenant:
+                        instance.tenant = tenant
+
+                # 3. CRITICAL SAFETY CHECK
+                # If we still have no tenant, DO NOT SAVE. 
+                # Saving now would cause 'RelatedObjectDoesNotExist' and crash the server.
+                if not getattr(instance, 'tenant_id', None) and not getattr(instance, 'tenant', None):
+                    continue 
             
             instance.save()
+            
         formset.save_m2m()
 
     def save_related(self, request, form, formsets, change):

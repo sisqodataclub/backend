@@ -519,52 +519,40 @@ class ProductVariant(TenantAwareModel):
 # ============================================================================
 
 class ProductImage(TenantAwareModel):
-    """
-    Multiple images per product (gallery)
-    Tenant-aware with automatic filtering
-    """
-    product = models.ForeignKey(
-        Product,
-        on_delete=models.CASCADE,
-        related_name='images'
-    )
-    
-    image_url = models.URLField(help_text="Image URL (S3/Cloudinary)")
-    alt_text = models.CharField(
-        max_length=200,
-        blank=True,
-        help_text="SEO alt text"
-    )
-    position = models.PositiveIntegerField(
-        default=0,
-        help_text="Display order (lower = first)"
-    )
-    is_primary = models.BooleanField(
-        default=False,
-        help_text="Use as main product image?"
-    )
-    
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='images')
+    image_url = models.URLField(help_text="Image URL")
+    alt_text = models.CharField(max_length=200, blank=True)
+    position = models.PositiveIntegerField(default=0)
+    is_primary = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     
     class Meta:
         ordering = ['position']
-        indexes = [
-            models.Index(fields=['tenant', 'product', 'position']),
-        ]
+        indexes = [models.Index(fields=['tenant', 'product', 'position'])]
         verbose_name = 'Product Image'
         verbose_name_plural = 'Product Images'
     
     def __str__(self):
-        return f"Image for {self.product.name} (pos: {self.position})"
+        return f"Image for {self.product.name}"
     
     def save(self, *args, **kwargs):
-        # If this is marked as primary, unmark others
-        if self.is_primary:
+        # 1. FIX: Attempt to inherit tenant_id from Product if missing
+        # We access tenant_id (the raw ID) to avoid triggering a DB lookup crash
+        if not self.tenant_id and self.product_id:
+            # We can use self.product.tenant_id safely if the product object is loaded
+            # Or fetch just the ID if needed, but usually self.product is available
+            if hasattr(self.product, 'tenant_id') and self.product.tenant_id:
+                self.tenant_id = self.product.tenant_id
+
+        # 2. FIX: Only access 'self.tenant' if we actually have a tenant_id
+        # Accessing self.tenant when tenant_id is None causes RelatedObjectDoesNotExist
+        if self.is_primary and self.tenant_id:
             ProductImage.objects.filter(
-                tenant=self.tenant,
+                tenant=self.tenant,  # Safe to access now because tenant_id exists
                 product=self.product,
                 is_primary=True
             ).exclude(pk=self.pk).update(is_primary=False)
+
         super().save(*args, **kwargs)
 
 
