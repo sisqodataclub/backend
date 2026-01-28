@@ -1,13 +1,52 @@
+"""
+Product API URL Configuration - Clean & Production Ready
+"""
+"""
+Product API URL Configuration - Clean & Production Ready
+"""
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import ProductViewSet, ReviewViewSet, DiscountViewSet
+from .views import ProductViewSet, ReviewViewSet, DiscountViewSet, ProductVariantViewSet
 
+app_name = 'products'
+
+# Create a router and register our viewsets with it
 router = DefaultRouter()
+
+# Product endpoints
+# Generates:
+# - /api/products/ (list)
+# - /api/products/{id}/ (detail)
+# - /api/products/featured/ (@action)
+# - /api/products/bestsellers/ (@action)
+# - /api/products/{id}/related/ (@action)
+# - etc.
 router.register(r'products', ProductViewSet, basename='product')
+
+# Review endpoints
+# Generates:
+# - /api/reviews/ (list)
+# - /api/reviews/{id}/ (detail)
+# - /api/reviews/{id}/mark_helpful/ (@action)
+# - /api/reviews/{id}/approve/ (@action)
 router.register(r'reviews', ReviewViewSet, basename='review')
+
+# Discount endpoints
+# Generates:
+# - /api/discounts/ (list)
+# - /api/discounts/{id}/ (detail)
+# - /api/discounts/validate/ (@action)
+# - /api/discounts/{id}/increment_usage/ (@action)
 router.register(r'discounts', DiscountViewSet, basename='discount')
 
+# Variant endpoints
+# Generates:
+# - /api/variants/ (list)
+# - /api/variants/{id}/ (detail)
+router.register(r'variants', ProductVariantViewSet, basename='variant')
+
 urlpatterns = [
+    # Include all router URLs automatically
     path('', include(router.urls)),
 ]
 

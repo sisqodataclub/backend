@@ -1,61 +1,112 @@
 """
-Complete E-Commerce Admin Configuration
-With Inline Editing for Images and Variants
+Complete E-Commerce Admin Configuration for Multi-Tenant SaaS
+Super Admin can see ALL data across ALL tenants using .all_objects
 """
-from django.contrib import admin
+from django.contrib import admin, messages
+from django.db.models import Count, Avg
+from django.utils.html import format_html
+from django.utils import timezone
+from django.urls import reverse
 from .models import Product, ProductVariant, ProductImage, Review, Discount
 
-# ==========================================
-# 1. Inlines (Edit these INSIDE the Product page)
-# ==========================================
+
+# ============================================================================
+# 1. Inline Models (Edit inside Product page)
+# ============================================================================
 
 class ProductImageInline(admin.TabularInline):
-    """
-    Add/Edit product images directly inside Product page
-    """
+    """Inline for managing product images/gallery"""
     model = ProductImage
-    extra = 1  # Show 1 empty slot by default
-    fields = ['image_url', 'alt_text', 'is_primary', 'position']
+    extra = 1
+    max_num = 20
+    fields = ['image_preview', 'image_url', 'alt_text', 'is_primary', 'position']
+    readonly_fields = ['image_preview']
     ordering = ['position']
+    classes = ['collapse']
+    verbose_name = "Product Image"
+    verbose_name_plural = "Product Images (Gallery)"
+    
+    # ✅ Use all_objects to ensure data loads regardless of tenant context
+    def get_queryset(self, request):
+        return self.model.all_objects.all()
+
+    def image_preview(self, obj):
+        if obj.image_url:
+            return format_html('<img src="{}" style="height: 40px; border-radius: 4px;" />', obj.image_url)
+        return ""
 
 
 class ProductVariantInline(admin.TabularInline):
-    """
-    Add/Edit product variants (size/color) directly inside Product page
-    """
+    """Inline for managing product variants"""
     model = ProductVariant
-    extra = 0  # Don't show empty slots (they clutter the page)
-    fields = ['option1_value', 'option2_value', 'sku', 'price', 'stock', 'is_active']
-    show_change_link = True  # Button to edit full details of variant
+    extra = 0
+    fields = [
+        'option1_value', 'option2_value',
+        'sku', 'price', 'stock', 'is_active'
+    ]
+    show_change_link = True
     ordering = ['position']
+    verbose_name = "Product Variant"
+    verbose_name_plural = "Product Variants (Size/Color Options)"
+
+    # ✅ Use all_objects to ensure data loads regardless of tenant context
+    def get_queryset(self, request):
+        return self.model.all_objects.all()
 
 
-# ==========================================
-# 2. Main Product Admin
-# ==========================================
+# ============================================================================
+# 2. Product Admin - Main Model
+# ============================================================================
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    """
-    Main Product Admin with Inline Editing
-    """
-    list_display = [
-        'name', 'tenant', 'sku', 'price', 'final_price', 
-        'stock', 'is_active', 'is_featured', 'category'
-    ]
-    list_filter = [
-        'tenant', 'is_active', 'is_featured', 'category', 
-        'brand', 'is_digital', 'track_inventory'
-    ]
-    search_fields = ['name', 'sku', 'description', 'tags']
-    prepopulated_fields = {'slug': ('name',)}
+    """Admin interface for Products with multi-tenant support"""
     
-    # ⚡ INLINES - Edit Images & Variants inside Product page!
+    # List View
+    list_display = [
+        'product_image',
+        'name',
+        'tenant_link',
+        'category',
+        'price_display',
+        'stock_status',
+        'status_badge',
+        'variant_count_display'
+    ]
+    list_display_links = ['product_image', 'name']
+    list_filter = [
+        'tenant',
+        'is_active',
+        'category',
+        'track_inventory',
+        'created_at'
+    ]
+    search_fields = [
+        'name', 'sku', 'tenant__name', 'tenant__domain'
+    ]
+    list_per_page = 50
+    list_select_related = ['tenant']
+    actions = [
+        'activate_products',
+        'deactivate_products',
+        'duplicate_products'
+    ]
+    date_hierarchy = 'created_at'
+    save_on_top = True
+    
+    # Detail View
+    prepopulated_fields = {'slug': ('name',)}
+    readonly_fields = [
+        'tenant', 'created_at', 'updated_at', 
+        'view_count', 'total_sales', 'average_rating'
+    ]
     inlines = [ProductImageInline, ProductVariantInline]
     
     fieldsets = (
         ('Basic Information', {
-            'fields': ('tenant', 'name', 'slug', 'short_description', 'description')
+            'fields': (
+                'tenant', 'name', 'slug', 'short_description', 'description'
+            )
         }),
         ('Pricing', {
             'fields': (
@@ -73,15 +124,11 @@ class ProductAdmin(admin.ModelAdmin):
         ('Classification', {
             'fields': ('category', 'brand', 'tags')
         }),
-        ('Physical Properties', {
-            'fields': ('weight', 'length', 'width', 'height'),
-            'classes': ('collapse',)
-        }),
         ('Media', {
             'fields': ('image_url', 'video_url'),
-            'description': 'Main product image. Additional images can be added below in the Images section.'
+            'description': 'Main product image. Use gallery below for additional images.'
         }),
-        ('Status & Features', {
+        ('Status', {
             'fields': (
                 'is_active', 'is_featured', 'is_digital',
                 'requires_shipping', 'is_taxable', 'has_variants'
@@ -92,204 +139,215 @@ class ProductAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
         ('Statistics', {
-            'fields': ('average_rating', 'review_count', 'total_sales', 'view_count'),
+            'fields': ('view_count', 'total_sales', 'average_rating', 'review_count'),
             'classes': ('collapse',)
         }),
     )
     
-    readonly_fields = ['average_rating', 'review_count', 'total_sales', 'view_count']
+    # ✅ CRITICAL: Use all_objects to see ALL products across ALL tenants
+    def get_queryset(self, request):
+        qs = self.model.all_objects.all().select_related('tenant')
+        # Add annotations for performance
+        return qs.annotate(
+            variant_count=Count('variants', distinct=True),
+        )
     
-    # Save the product first, then save related objects
+    # Custom Display Methods
+    def product_image(self, obj):
+        if obj.image_url:
+            return format_html(
+                '<img src="{}" style="width: 50px; height: 50px; object-fit: cover; border-radius: 4px;" />',
+                obj.image_url
+            )
+        return "🖼️"
+    product_image.short_description = "Image"
+    
+    def tenant_link(self, obj):
+        url = reverse('admin:core_tenant_change', args=[obj.tenant.id])
+        return format_html('<a href="{}">{}</a>', url, obj.tenant.name)
+    tenant_link.short_description = "Tenant"
+    tenant_link.admin_order_field = 'tenant__name'
+    
+    def price_display(self, obj):
+        if obj.compare_at_price and obj.compare_at_price > obj.price:
+            return format_html(
+                '<s style="color: #999;">${}</s> <strong>${}</strong>',
+                obj.compare_at_price, obj.price
+            )
+        return f"${obj.price}"
+    price_display.short_description = "Price"
+    
+    def stock_status(self, obj):
+        if not obj.track_inventory:
+            return format_html('<span style="color: #3498db;">∞ Unlimited</span>')
+        
+        if obj.stock <= 0:
+            if obj.allow_backorders:
+                return format_html('<span style="color: #e67e22;">⚠ Backorder</span>')
+            return format_html('<span style="color: #e74c3c; font-weight: bold;">✗ Out of Stock</span>')
+        elif obj.stock <= obj.low_stock_threshold:
+            return format_html('<span style="color: #e67e22;">Low ({})</span>', obj.stock)
+        else:
+            return format_html('<span style="color: #27ae60;">✓ {}</span>', obj.stock)
+    stock_status.short_description = "Stock"
+    
+    def status_badge(self, obj):
+        if obj.is_active:
+            return format_html('<span style="background: #27ae60; color: white; padding: 2px 6px; border-radius: 3px;">Active</span>')
+        return format_html('<span style="background: #95a5a6; color: white; padding: 2px 6px; border-radius: 3px;">Inactive</span>')
+    status_badge.short_description = "Status"
+    
+    def variant_count_display(self, obj):
+        return obj.variant_count
+    variant_count_display.short_description = "Variants"
+    variant_count_display.admin_order_field = 'variant_count'
+    
+    # Actions
+    def activate_products(self, request, queryset):
+        updated = queryset.update(is_active=True, published_at=timezone.now())
+        self.message_user(request, f'{updated} products activated.')
+    
+    def deactivate_products(self, request, queryset):
+        updated = queryset.update(is_active=False)
+        self.message_user(request, f'{updated} products deactivated.')
+    
+    def duplicate_products(self, request, queryset):
+        duplicated = 0
+        for product in queryset:
+            try:
+                new_product = product
+                new_product.pk = None
+                new_product.sku = f"{product.sku}-COPY" if product.sku else ""
+                new_product.slug = f"{product.slug}-copy"
+                new_product.name = f"{product.name} (Copy)"
+                new_product.total_sales = 0
+                new_product.view_count = 0
+                new_product.save()
+                duplicated += 1
+            except Exception as e:
+                self.message_user(request, f"Error duplicating {product.name}: {e}", messages.ERROR)
+        
+        self.message_user(request, f'{duplicated} products duplicated successfully.')
+    
     def save_related(self, request, form, formsets, change):
         super().save_related(request, form, formsets, change)
-        # Automatically set has_variants if variants exist
-        if form.instance.variants.exists() and not form.instance.has_variants:
-            form.instance.has_variants = True
-            form.instance.save(update_fields=['has_variants'])
+        product = form.instance
+        # Auto-update has_variants flag based on inline variants
+        if product.variants.exists() != product.has_variants:
+            product.has_variants = product.variants.exists()
+            product.save(update_fields=['has_variants'])
 
 
-# ==========================================
-# 3. Variant Admin (Standalone)
-# ==========================================
+# ============================================================================
+# 3. Product Variant Admin
+# ============================================================================
 
 @admin.register(ProductVariant)
 class ProductVariantAdmin(admin.ModelAdmin):
-    """
-    Standalone Variant Admin (can also be edited inline on Product page)
-    """
     list_display = [
-        'product', 'display_name', 'sku', 'price', 'stock', 'is_active'
+        'variant_display', 'product_link', 'tenant', 
+        'sku', 'price_display', 'stock_status', 'is_active'
     ]
-    list_filter = ['tenant', 'is_active', 'product']
-    search_fields = ['sku', 'option1_value', 'option2_value', 'option3_value', 'product__name']
-    list_editable = ['is_active']
+    list_filter = ['tenant', 'is_active', 'created_at']
+    search_fields = ['sku', 'product__name', 'tenant__name', 'option1_value']
+    list_select_related = ['product', 'tenant']
+    readonly_fields = ['created_at', 'updated_at']
     
-    fieldsets = (
-        ('Product', {
-            'fields': ('tenant', 'product')
-        }),
-        ('Variant Options', {
-            'fields': (
-                ('option1_name', 'option1_value'),
-                ('option2_name', 'option2_value'),
-                ('option3_name', 'option3_value'),
-            )
-        }),
-        ('Pricing', {
-            'fields': ('price', 'compare_at_price')
-        }),
-        ('Inventory', {
-            'fields': ('sku', 'barcode', 'stock', 'weight')
-        }),
-        ('Media & Status', {
-            'fields': ('image_url', 'is_active', 'position')
-        }),
-    )
-
-
-# ==========================================
-# 4. Image Admin (Standalone)
-# ==========================================
-
-@admin.register(ProductImage)
-class ProductImageAdmin(admin.ModelAdmin):
-    """
-    Standalone Image Admin (can also be edited inline on Product page)
-    """
-    list_display = ['product', 'position', 'is_primary', 'alt_text', 'image_preview']
-    list_filter = ['tenant', 'is_primary']
-    list_editable = ['position', 'is_primary']
-    search_fields = ['product__name', 'alt_text']
+    # ✅ CRITICAL: Use all_objects to see ALL variants
+    def get_queryset(self, request):
+        return self.model.all_objects.all().select_related('product', 'tenant')
     
-    def image_preview(self, obj):
-        """Show small image preview in admin list"""
-        if obj.image_url:
-            return f'<img src="{obj.image_url}" style="max-height:50px; max-width:100px;" />'
-        return 'No image'
-    image_preview.allow_tags = True
-    image_preview.short_description = 'Preview'
+    def variant_display(self, obj):
+        return obj.display_name
+    variant_display.short_description = "Variant"
+    
+    def product_link(self, obj):
+        url = reverse('admin:products_product_change', args=[obj.product.id])
+        return format_html('<a href="{}">{}</a>', url, obj.product.name)
+    product_link.short_description = "Product"
+    
+    def price_display(self, obj):
+        if obj.price: return f"${obj.price}"
+        return format_html('<span style="color: #7f8c8d;">(Parent)</span>')
+    price_display.short_description = "Price"
+    
+    def stock_status(self, obj):
+        if obj.stock <= 0:
+            return format_html('<span style="color: #e74c3c;">✗ 0</span>')
+        return format_html('<span style="color: #27ae60;">✓ {}</span>', obj.stock)
+    stock_status.short_description = "Stock"
 
 
-# ==========================================
-# 5. Review Admin
-# ==========================================
+# ============================================================================
+# 4. Review Admin
+# ============================================================================
 
 @admin.register(Review)
 class ReviewAdmin(admin.ModelAdmin):
-    """
-    Review moderation and management
-    """
     list_display = [
-        'product', 'customer_name', 'rating', 
-        'is_approved', 'is_verified_purchase', 'created_at'
+        'rating_stars', 'product_link', 'customer_name', 
+        'tenant', 'is_approved_badge', 'created_at'
     ]
-    list_filter = [
-        'tenant', 'rating', 'is_approved', 
-        'is_verified_purchase', 'created_at'
-    ]
-    search_fields = ['customer_name', 'customer_email', 'content', 'product__name']
-    list_editable = ['is_approved']
-    readonly_fields = ['helpful_count', 'created_at', 'updated_at']
-    date_hierarchy = 'created_at'
-    
-    fieldsets = (
-        ('Product & Customer', {
-            'fields': ('tenant', 'product', 'customer_name', 'customer_email')
-        }),
-        ('Review Content', {
-            'fields': ('rating', 'title', 'content', 'image_url')
-        }),
-        ('Moderation', {
-            'fields': ('is_approved', 'is_verified_purchase')
-        }),
-        ('Engagement', {
-            'fields': ('helpful_count',),
-            'classes': ('collapse',)
-        }),
-        ('Timestamps', {
-            'fields': ('created_at', 'updated_at'),
-            'classes': ('collapse',)
-        }),
-    )
-    
+    list_filter = ['tenant', 'rating', 'is_approved', 'created_at']
+    search_fields = ['customer_name', 'content', 'product__name']
     actions = ['approve_reviews', 'unapprove_reviews']
+    readonly_fields = ['created_at', 'updated_at']
+    
+    # ✅ CRITICAL: Use all_objects
+    def get_queryset(self, request):
+        return self.model.all_objects.all().select_related('product', 'tenant')
+    
+    def rating_stars(self, obj):
+        return format_html('<span style="color: #f39c12;">{}</span>', '★' * obj.rating)
+    rating_stars.short_description = "Rating"
+    
+    def product_link(self, obj):
+        url = reverse('admin:products_product_change', args=[obj.product.id])
+        return format_html('<a href="{}">{}</a>', url, obj.product.name)
+    product_link.short_description = "Product"
+    
+    def is_approved_badge(self, obj):
+        if obj.is_approved:
+            return format_html('<span style="color: #27ae60;">Approved</span>')
+        return format_html('<span style="color: #e74c3c;">Pending</span>')
+    is_approved_badge.short_description = "Status"
     
     def approve_reviews(self, request, queryset):
-        """Bulk approve selected reviews"""
-        updated = queryset.update(is_approved=True)
-        self.message_user(request, f'{updated} review(s) approved.')
-    approve_reviews.short_description = 'Approve selected reviews'
+        queryset.update(is_approved=True)
+        # Update product ratings for selected
+        for review in queryset: review.product.update_rating(review.rating)
+        self.message_user(request, "Reviews approved.")
     
     def unapprove_reviews(self, request, queryset):
-        """Bulk unapprove selected reviews"""
-        updated = queryset.update(is_approved=False)
-        self.message_user(request, f'{updated} review(s) unapproved.')
-    unapprove_reviews.short_description = 'Unapprove selected reviews'
+        queryset.update(is_approved=False)
+        self.message_user(request, "Reviews unapproved.")
 
 
-# ==========================================
-# 6. Discount Admin
-# ==========================================
+# ============================================================================
+# 5. Discount Admin
+# ============================================================================
 
 @admin.register(Discount)
 class DiscountAdmin(admin.ModelAdmin):
-    """
-    Coupon and discount code management
-    """
     list_display = [
-        'code', 'tenant', 'discount_type', 'discount_value',
-        'applies_to', 'times_used', 'is_active', 'is_valid_now', 'start_date', 'end_date'
+        'code', 'tenant_link', 'discount_type', 'value_display',
+        'times_used', 'is_active', 'end_date'
     ]
-    list_filter = [
-        'tenant', 'discount_type', 'applies_to', 
-        'is_active', 'start_date', 'end_date'
-    ]
-    search_fields = ['code', 'description']
-    readonly_fields = ['times_used', 'created_at', 'updated_at']
+    list_filter = ['tenant', 'discount_type', 'is_active']
+    search_fields = ['code', 'tenant__name']
     filter_horizontal = ['products']
-    date_hierarchy = 'start_date'
     
-    fieldsets = (
-        ('Basic Information', {
-            'fields': ('tenant', 'code', 'description')
-        }),
-        ('Discount Configuration', {
-            'fields': (
-                'discount_type', 'discount_value',
-                'applies_to', 'products', 'categories'
-            )
-        }),
-        ('Requirements & Limits', {
-            'fields': (
-                'minimum_purchase', 'usage_limit',
-                'usage_limit_per_customer', 'times_used'
-            )
-        }),
-        ('Schedule', {
-            'fields': ('start_date', 'end_date', 'is_active')
-        }),
-        ('Timestamps', {
-            'fields': ('created_at', 'updated_at'),
-            'classes': ('collapse',)
-        }),
-    )
+    # ✅ CRITICAL: Use all_objects
+    def get_queryset(self, request):
+        return self.model.all_objects.all().select_related('tenant')
     
-    def is_valid_now(self, obj):
-        """Show if discount is currently valid"""
-        return obj.is_valid
-    is_valid_now.boolean = True
-    is_valid_now.short_description = 'Valid Now?'
+    def tenant_link(self, obj):
+        url = reverse('admin:core_tenant_change', args=[obj.tenant.id])
+        return format_html('<a href="{}">{}</a>', url, obj.tenant.name)
+    tenant_link.short_description = "Tenant"
     
-    actions = ['activate_discounts', 'deactivate_discounts']
-    
-    def activate_discounts(self, request, queryset):
-        """Bulk activate selected discounts"""
-        updated = queryset.update(is_active=True)
-        self.message_user(request, f'{updated} discount(s) activated.')
-    activate_discounts.short_description = 'Activate selected discounts'
-    
-    def deactivate_discounts(self, request, queryset):
-        """Bulk deactivate selected discounts"""
-        updated = queryset.update(is_active=False)
-        self.message_user(request, f'{updated} discount(s) deactivated.')
-    deactivate_discounts.short_description = 'Deactivate selected discounts'
+    def value_display(self, obj):
+        if obj.discount_type == 'percentage': return f"{obj.discount_value}%"
+        if obj.discount_type == 'fixed_amount': return f"${obj.discount_value}"
+        return obj.discount_type
+    value_display.short_description = "Value"
