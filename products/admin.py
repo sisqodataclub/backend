@@ -175,8 +175,14 @@ class ProductAdmin(admin.ModelAdmin):
         instances = formset.save(commit=False)
         for instance in instances:
             if hasattr(instance, 'tenant'):
-                if not request.user.is_superuser or not instance.tenant:
+                # FIX: Inherit the tenant from the parent Product (form.instance)
+                # This guarantees the image matches the product's store.
+                if form.instance.tenant:
+                    instance.tenant = form.instance.tenant
+                elif not instance.tenant:
+                    # Fallback to request only if parent has no tenant
                     instance.tenant = getattr(request, 'tenant', None)
+            
             instance.save()
         formset.save_m2m()
 
