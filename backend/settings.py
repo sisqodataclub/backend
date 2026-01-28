@@ -209,7 +209,7 @@ if use_redis:
                     'max_connections': 100,
                     'retry_on_timeout': True
                 },
-                'SERIALIZER': 'django_redis.serializers.json.JSONSerializer',
+                'SERIALIZER': 'django_redis.serializers.pickle.PickleSerializer',
             },
             'KEY_PREFIX': f'saas_{DJANGO_ENV}',
         }

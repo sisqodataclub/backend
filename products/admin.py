@@ -146,7 +146,7 @@ class ProductAdmin(admin.ModelAdmin):
     
     # ✅ CRITICAL: Use all_objects to see ALL products across ALL tenants
     def get_queryset(self, request):
-        qs = self.model.all_objects.all().select_related('tenant')
+        qs = self.model.objects.all().select_related('tenant')
         # Add annotations for performance
         return qs.annotate(
             variant_count=Count('variants', distinct=True),
