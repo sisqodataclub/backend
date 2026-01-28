@@ -60,7 +60,7 @@ class ProductVariantInline(admin.TabularInline):
 
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    """Admin interface for Products with multi-tenant support"""
+    """Admin interface for Products with multi-tenant support and conditional visibility"""
     
     # List View
     list_display = [
@@ -97,7 +97,7 @@ class ProductAdmin(admin.ModelAdmin):
     # Detail View
     prepopulated_fields = {'slug': ('name',)}
     readonly_fields = [
-        'tenant', 'created_at', 'updated_at', 
+        'created_at', 'updated_at', 
         'view_count', 'total_sales', 'average_rating'
     ]
     inlines = [ProductImageInline, ProductVariantInline]
@@ -143,16 +143,54 @@ class ProductAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
-    
-    # ✅ CRITICAL: Use objects to see ALL products across ALL tenants
+
+    # ========================================================================
+    # MULTI-TENANT LOGIC
+    # ========================================================================
+
+    def get_fields(self, request, obj=None):
+        """Show 'tenant' field only to Superusers"""
+        fields = super().get_fields(request, obj)
+        if not request.user.is_superuser:
+            if 'tenant' in fields:
+                fields.remove('tenant')
+        return fields
+
     def get_queryset(self, request):
+        """Use objects to see ALL products across ALL tenants"""
         qs = self.model.objects.all().select_related('tenant')
-        # Add annotations for performance
         return qs.annotate(
             variant_count=Count('variants', distinct=True),
         )
+
+    def save_model(self, request, obj, form, change):
+        """Auto-assign tenant for non-superusers or use selected tenant for superusers"""
+        if not request.user.is_superuser or not obj.tenant:
+            obj.tenant = getattr(request, 'tenant', None)
+        super().save_model(request, obj, form, change)
+
+    def save_formset(self, request, form, formset, change):
+        """Ensure Inlines (Variants/Images) also get the correct tenant"""
+        instances = formset.save(commit=False)
+        for instance in instances:
+            if hasattr(instance, 'tenant'):
+                if not request.user.is_superuser or not instance.tenant:
+                    instance.tenant = getattr(request, 'tenant', None)
+            instance.save()
+        formset.save_m2m()
+
+    def save_related(self, request, form, formsets, change):
+        super().save_related(request, form, formsets, change)
+        product = form.instance
+        # Auto-update has_variants flag based on inline variants
+        if product.variants.exists() != product.has_variants:
+            product.has_variants = product.variants.exists()
+            product.save(update_fields=['has_variants'])
+
+    # ========================================================================
+    # DISPLAY METHODS
+    # ========================================================================
     
-    # Custom Display Methods
     def product_image(self, obj):
         if obj.image_url:
             return format_html(
@@ -163,6 +201,7 @@ class ProductAdmin(admin.ModelAdmin):
     product_image.short_description = "Image"
     
     def tenant_link(self, obj):
+        from django.urls import reverse
         url = reverse('admin:core_tenant_change', args=[obj.tenant.id])
         return format_html('<a href="{}">{}</a>', url, obj.tenant.name)
     tenant_link.short_description = "Tenant"
@@ -198,12 +237,16 @@ class ProductAdmin(admin.ModelAdmin):
     status_badge.short_description = "Status"
     
     def variant_count_display(self, obj):
-        return obj.variant_count
+        return getattr(obj, 'variant_count', 0)
     variant_count_display.short_description = "Variants"
     variant_count_display.admin_order_field = 'variant_count'
-    
-    # Actions
+
+    # ========================================================================
+    # ACTIONS
+    # ========================================================================
+
     def activate_products(self, request, queryset):
+        from django.utils import timezone
         updated = queryset.update(is_active=True, published_at=timezone.now())
         self.message_user(request, f'{updated} products activated.')
     
@@ -213,6 +256,7 @@ class ProductAdmin(admin.ModelAdmin):
     
     def duplicate_products(self, request, queryset):
         duplicated = 0
+        from django.contrib import messages
         for product in queryset:
             try:
                 new_product = product
@@ -228,15 +272,6 @@ class ProductAdmin(admin.ModelAdmin):
                 self.message_user(request, f"Error duplicating {product.name}: {e}", messages.ERROR)
         
         self.message_user(request, f'{duplicated} products duplicated successfully.')
-    
-    def save_related(self, request, form, formsets, change):
-        super().save_related(request, form, formsets, change)
-        product = form.instance
-        # Auto-update has_variants flag based on inline variants
-        if product.variants.exists() != product.has_variants:
-            product.has_variants = product.variants.exists()
-            product.save(update_fields=['has_variants'])
-
 
 # ============================================================================
 # 3. Product Variant Admin
