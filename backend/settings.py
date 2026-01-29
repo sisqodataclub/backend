@@ -110,7 +110,7 @@ else:
     ]
 
 MIDDLEWARE = [
-    # Security & CORS
+    # Security & CORS (CorsMiddleware MUST stay at the top)
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     
@@ -402,32 +402,29 @@ DATA_UPLOAD_MAX_NUMBER_FIELDS = 1000
 # 10. CORS & HTTPS HARDENING
 # ==============================================================================
 
-# Parse CORS origins
+# Parse CORS origins into a proper Python list
 cors_origins_str = get_env_var('CORS_ALLOWED_ORIGINS', '')
 CORS_ALLOWED_ORIGINS = [origin.strip() for origin in cors_origins_str.split(',') if origin.strip()]
 
 # CORS settings
 CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOW_METHODS = ['DELETE', 'GET', 'OPTIONS', 'PATCH', 'POST', 'PUT']
-CORS_ALLOW_HEADERS = [
-    'accept',
-    'accept-encoding',
-    'authorization',
-    'content-type',
-    'dnt',
-    'origin',
-    'user-agent',
-    'x-csrftoken',
-    'x-requested-with',
+
+# Explicitly allow X-Tenant header for multi-tenancy support
+from corsheaders.defaults import default_headers
+CORS_ALLOW_HEADERS = list(default_headers) + [
     'x-tenant',
 ]
 
 if DEBUG:
     CORS_ALLOW_ALL_ORIGINS = True
+    # If in debug, keep origins empty as we allow all
+    _temp_origins = CORS_ALLOWED_ORIGINS 
     CORS_ALLOWED_ORIGINS = [] 
 else:
     CORS_ALLOW_ALL_ORIGINS = False
     
+    # If no specific origins in .env, fallback to ALLOWED_HOSTS
     if not CORS_ALLOWED_ORIGINS:
         CORS_ALLOWED_ORIGINS = [
             f"https://{host}" for host in ALLOWED_HOSTS 
@@ -442,7 +439,7 @@ else:
     # Trust proxy headers from Nginx Proxy Manager
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     
-    # CSRF trusted origins
+    # CSRF trusted origins (Must match the list format)
     CSRF_TRUSTED_ORIGINS = CORS_ALLOWED_ORIGINS.copy()
     
     # Additional security for production
