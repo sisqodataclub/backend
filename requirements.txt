@@ -30,3 +30,4 @@ redis==5.0.1
 # UTILITIES
 # ============================================
 requests==2.31.0  # Often needed for health checks or external APIs
+stripe==7.12.0  # Stripe payment processing

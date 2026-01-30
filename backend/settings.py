@@ -57,6 +57,7 @@ INSTALLED_APPS = [
     'core',
     'products',
     'services',
+    'payments',
 
     # Django Apps
     'django.contrib.admin',
@@ -488,9 +489,21 @@ CSRF_FAILURE_VIEW = 'core.views.csrf_failure'
 
 # Custom e-commerce settings
 ECOMMERCE = {
-    'DEFAULT_CURRENCY': 'USD',
+    'DEFAULT_CURRENCY': 'GBP',
     'DEFAULT_TAX_RATE': 0.20,  # 20% VAT
     'SHIPPING_ENABLED': True,
     'REVIEWS_REQUIRE_APPROVAL': True,
     'LOW_STOCK_THRESHOLD': 5,
 }
+
+# ==============================================================================
+# 13. STRIPE PAYMENT CONFIGURATION
+# ==============================================================================
+
+STRIPE_SECRET_KEY = get_env_var('STRIPE_SECRET_KEY', '')
+STRIPE_PUBLISHABLE_KEY = get_env_var('STRIPE_PUBLISHABLE_KEY', '')
+STRIPE_WEBHOOK_SECRET = get_env_var('STRIPE_WEBHOOK_SECRET', '')
+
+# Stripe redirect URLs (update these to match your frontend)
+STRIPE_SUCCESS_URL = get_env_var('STRIPE_SUCCESS_URL', 'https://web.franciscodes.com/checkout/success')
+STRIPE_CANCEL_URL = get_env_var('STRIPE_CANCEL_URL', 'https://web.franciscodes.com/cart')
