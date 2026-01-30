@@ -95,7 +95,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                         )
                     
                     # Check stock availability
-                    if product.track_inventory and product.stock_quantity < item['quantity']:
+                    if product.track_inventory and product.stock < item['quantity']:
                         return Response(
                             {'error': f"Insufficient stock for {product.name}"},
                             status=status.HTTP_400_BAD_REQUEST
