@@ -145,7 +145,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                         unit_price=item_data['unit_price'],
                         quantity=item_data['quantity'],
                         line_total=item_data['line_total'],
-                        product_image=product.image.url if product.image else '',
+                        product_image=product.image_url or '',
                     )
                 
                 # Step 5: Create Stripe Checkout Session
@@ -158,7 +158,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                             'product_data': {
                                 'name': product.name,
                                 'description': product.short_description or product.description[:100],
-                                'images': [product.image.url] if product.image else [],
+                                'images': [product.image_url] if product.image_url else [],
                             },
                             'unit_amount': int(item_data['unit_price'] * 100),  # Convert to cents
                         },
