@@ -39,6 +39,11 @@ if not DEBUG:
 raw_hosts = get_env_var('DJANGO_ALLOWED_HOSTS', 'localhost,127.0.0.1,backend')
 ALLOWED_HOSTS = [host.strip() for host in raw_hosts.split(',') if host.strip()]
 
+# Always allow specific internal hosts for Docker health checks
+for host in ['localhost', '127.0.0.1', 'backend']:
+    if host not in ALLOWED_HOSTS:
+        ALLOWED_HOSTS.append(host)
+
 # Environment
 DJANGO_ENV = get_env_var('DJANGO_ENV', 'development')
 
