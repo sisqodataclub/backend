@@ -185,7 +185,7 @@ class ProductDetailSerializer(TenantAwareSerializer):
     is_out_of_stock = serializers.BooleanField(read_only=True)
     can_purchase = serializers.BooleanField(read_only=True)
     profit_margin = serializers.DecimalField(
-        max_digits=5,
+        max_digits=12,
         decimal_places=2,
         read_only=True,
         allow_null=True

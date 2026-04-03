@@ -36,28 +36,30 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
     """
     serializer_class = BookingSerializer
     permission_classes = [permissions.AllowAny]  # TODO: Change to IsAuthenticated when auth is ready
-
+    
     def get_queryset(self):
         """Filter bookings by tenant"""
         tenant = getattr(self.request, 'tenant', None)
         if not tenant:
             return Booking.objects.none()
-
+        
         queryset = Booking.objects.filter(tenant=tenant).prefetch_related('items')
-
+        
         # Filter by customer email if provided
         email = self.request.query_params.get('email')
         if email:
             queryset = queryset.filter(customer_email=email)
-
+        
         return queryset
-
+    
     @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def create_checkout(self, request):
         """
         POST /api/payments/bookings/create_checkout/
-
+        
         Create a Stripe Checkout Session
+        Frontend sends: product IDs, quantities, customer info
+        Backend: Validates prices, creates booking, generates Stripe session
         """
         tenant = getattr(request, 'tenant', None)
         if not tenant:
@@ -65,20 +67,20 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                 {'error': 'Tenant not found'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
+        
         # Validate request data
         serializer = CreateCheckoutSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
+        
         data = serializer.validated_data
-
+        
         try:
             with transaction.atomic():
                 # Step 1: Validate products and calculate prices (BACKEND IS SOURCE OF TRUTH)
                 items_data = []
                 subtotal = Decimal('0.00')
-
+                
                 for item in data['items']:
                     try:
                         product = Product.objects.get(
@@ -91,14 +93,14 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                             {'error': f"Product {item['product_id']} not found or inactive"},
                             status=status.HTTP_404_NOT_FOUND
                         )
-
+                    
                     # Check stock availability
                     if product.track_inventory and product.stock < item['quantity']:
                         return Response(
                             {'error': f"Insufficient stock for {product.name}"},
                             status=status.HTTP_400_BAD_REQUEST
                         )
-
+                    
                     # Use backend price (NEVER trust frontend)
                     unit_price = product.final_price
                     line_total = unit_price * item['quantity']
@@ -111,7 +113,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                         'unit_price': unit_price,
                         'line_total': line_total,
                     })
-
+                
                 # Step 2: Calculate shipping
                 shipping_cost = Decimal('0.00') if subtotal > 40 else Decimal('2.00')
 
@@ -120,7 +122,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                 multi_item_discount = Decimal('5.00') if total_quantity > 1 else Decimal('0.00')
 
                 total = subtotal + shipping_cost - multi_item_discount
-
+                
                 # Step 3: Create Booking with UNPAID status
                 booking = Booking.objects.create(
                     tenant=tenant,
@@ -135,7 +137,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                     ip_address=self._get_client_ip(request),
                     notes=f"Multi-item discount applied: £{multi_item_discount}" if multi_item_discount else '',
                 )
-
+                
                 # Step 4: Create BookingItems (snapshot of products)
                 for item_data in items_data:
                     product = item_data['product']
@@ -151,7 +153,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                         line_total=item_data['line_total'],
                         product_image=product.image_url or '',
                     )
-
+                
                 # Step 5: Create Stripe Checkout Session
                 line_items = []
                 for item_data in items_data:
@@ -168,7 +170,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                         },
                         'quantity': item_data['quantity'],
                     })
-
+                
                 # Add shipping as a line item if applicable
                 if shipping_cost > 0:
                     line_items.append({
@@ -182,6 +184,8 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                         'quantity': 1,
                     })
 
+
+                
                 # Create Stripe session
                 session_params = dict(
                     payment_method_types=['card'],
@@ -190,6 +194,8 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                     success_url=settings.STRIPE_SUCCESS_URL + f'?session_id={{CHECKOUT_SESSION_ID}}',
                     cancel_url=settings.STRIPE_CANCEL_URL,
                     customer_email=data['customer_email'],
+                    # Stripe collects and stores the shipping address natively.
+                    # Visible in Stripe Dashboard → Payments → payment detail.
                     shipping_address_collection={
                         'allowed_countries': [
                             'GB', 'US', 'CA', 'AU', 'IE',
@@ -216,20 +222,20 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                     session_params['discounts'] = [{'coupon': coupon.id}]
 
                 checkout_session = stripe.checkout.Session.create(**session_params)
-
+                
                 # Step 6: Update booking with Stripe session ID
                 booking.stripe_checkout_session_id = checkout_session.id
                 booking.save(update_fields=['stripe_checkout_session_id'])
-
+                
                 logger.info(f"Created checkout session for booking {booking.id}: {checkout_session.id}")
-
+                
                 # Return checkout URL to frontend
                 return Response({
                     'checkout_url': checkout_session.url,
                     'booking_id': booking.id,
                     'session_id': checkout_session.id,
                 }, status=status.HTTP_201_CREATED)
-
+        
         except stripe.error.StripeError as e:
             logger.error(f"Stripe error: {str(e)}")
             return Response(
@@ -242,7 +248,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                 {'error': 'An error occurred. Please try again.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
+    
     def _get_client_ip(self, request):
         """Get client IP address"""
         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
@@ -253,57 +259,19 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
         return ip
 
 
-# =====================================================================
-# NEW ENDPOINT: Fetch Success Details
-# =====================================================================
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def checkout_success(request):
-    """
-    GET /api/payments/checkout-success/?session_id=cs_live_123...
-    Looks up the Stripe session and returns order details for the success page.
-    """
-    session_id = request.query_params.get('session_id')
-    
-    if not session_id:
-        return Response(
-            {'error': 'Missing session_id parameter'}, 
-            status=status.HTTP_400_BAD_REQUEST
-        )
-
-    try:
-        session = stripe.checkout.Session.retrieve(session_id)
-        
-        customer_name = "Customer"
-        if session.customer_details and session.customer_details.name:
-            customer_name = session.customer_details.name
-
-        booking_id = session.metadata.get('booking_id') if session.metadata else None
-
-        return Response({
-            'message': f'Thanks for your order, {customer_name}!',
-            'customer_name': customer_name,
-            'customer_email': session.customer_details.email if session.customer_details else None,
-            'booking_id': booking_id,
-            'amount_total': session.amount_total / 100.0 if session.amount_total else 0,
-        }, status=status.HTTP_200_OK)
-
-    except stripe.error.StripeError as e:
-        logger.error(f"Stripe error retrieving session: {str(e)}")
-        return Response({'error': 'Invalid checkout session'}, status=status.HTTP_400_BAD_REQUEST)
-
-
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def stripe_webhook(request):
     """
     POST /api/payments/webhook/
+    
     Stripe Webhook Handler
+    Receives payment confirmations from Stripe and updates booking status
     """
     payload = request.body
     sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
-
+    
     try:
         event = stripe.Webhook.construct_event(
             payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
@@ -314,20 +282,20 @@ def stripe_webhook(request):
     except stripe.error.SignatureVerificationError:
         logger.error("Invalid webhook signature")
         return Response({'error': 'Invalid signature'}, status=400)
-
+    
     # Handle the event
     if event['type'] == 'checkout.session.completed':
         session = event['data']['object']
         _handle_checkout_session_completed(session)
-
+    
     elif event['type'] == 'payment_intent.succeeded':
         payment_intent = event['data']['object']
         logger.info(f"Payment succeeded: {payment_intent['id']}")
-
+    
     elif event['type'] == 'payment_intent.payment_failed':
         payment_intent = event['data']['object']
         _handle_payment_failed(payment_intent)
-
+    
     return Response({'status': 'success'}, status=200)
 
 
@@ -341,25 +309,24 @@ def _handle_checkout_session_completed(session):
         if not booking_id:
             logger.error("No booking_id in session metadata")
             return
-
+        
         booking = Booking.objects.get(id=booking_id)
-
+        
         # Update booking status
         booking.status = 'PAID'
         booking.stripe_payment_intent_id = session.get('payment_intent', '')
         booking.mark_as_paid()
-
+        
         logger.info(f"Booking {booking.id} marked as PAID")
-
-        # INACTIVE: Sending confirmation email via backend is disabled.
-        # Stripe Dashboard is now handling receipts automatically.
-        # _send_confirmation_email(booking)
-
+        
+        # Send confirmation email
+        _send_confirmation_email(booking)
+        
         # Update product stock
         for item in booking.items.all():
             if item.product and item.product.track_inventory:
                 item.product.increment_sales(item.quantity)
-
+        
     except Booking.DoesNotExist:
         logger.error(f"Booking not found: {booking_id}")
     except Exception as e:
@@ -373,7 +340,7 @@ def _handle_payment_failed(payment_intent):
         booking = Booking.objects.filter(
             stripe_payment_intent_id=payment_intent['id']
         ).first()
-
+        
         if booking:
             booking.mark_as_failed()
             logger.info(f"Booking {booking.id} marked as FAILED")
@@ -382,19 +349,16 @@ def _handle_payment_failed(payment_intent):
 
 
 def _send_confirmation_email(booking):
-    """
-    Send order confirmation email
-    NOTE: Currently inactive. Kept here for future use.
-    """
+    """Send order confirmation email"""
     try:
         subject = f"Order Confirmation - Booking #{booking.id}"
-
+        
         # Build email message
         items_text = "\n".join([
             f"- {item.product_name} x{item.quantity} - ${item.line_total}"
             for item in booking.items.all()
         ])
-
+        
         message = f"""
 Dear {booking.customer_name or 'Customer'},
 
@@ -421,7 +385,7 @@ Thank you for shopping with us!
 Best regards,
 The Team
         """
-
+        
         send_mail(
             subject=subject,
             message=message,
@@ -429,8 +393,8 @@ The Team
             recipient_list=[booking.customer_email],
             fail_silently=False,
         )
-
+        
         logger.info(f"Confirmation email sent to {booking.customer_email}")
-
+    
     except Exception as e:
         logger.error(f"Error sending confirmation email: {str(e)}")

@@ -510,5 +510,8 @@ STRIPE_PUBLISHABLE_KEY = get_env_var('STRIPE_PUBLISHABLE_KEY', '')
 STRIPE_WEBHOOK_SECRET = get_env_var('STRIPE_WEBHOOK_SECRET', '')
 
 # Stripe redirect URLs (update these to match your frontend)
-STRIPE_SUCCESS_URL = get_env_var('STRIPE_SUCCESS_URL', 'https://web.franciscodes.com/checkout/success')
-STRIPE_CANCEL_URL = get_env_var('STRIPE_CANCEL_URL', 'https://web.franciscodes.com/cart')
+# /opt/backend/backend/settings.py
+
+# Change these defaults to your current domain
+STRIPE_SUCCESS_URL = get_env_var('STRIPE_SUCCESS_URL', 'https://equivaiconic.co.uk/checkout/success')
+STRIPE_CANCEL_URL = get_env_var('STRIPE_CANCEL_URL', 'https://equivaiconic.co.uk/cart')
