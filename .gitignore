@@ -18,4 +18,7 @@ media/
 
 # OS
 .DS_Store
-Thumbs.db
+Thumbs.db__pycache__/
+*.pyc
+.env
+.env.local

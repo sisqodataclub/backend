@@ -1,0 +1,22 @@
+services:
+  local_postgres:
+    image: postgres:15-alpine
+    container_name: kali_local_db
+    environment:
+      POSTGRES_DB: ${DB_NAME:-saas_local_db}
+      POSTGRES_USER: ${DB_USER:-dev_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dev_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - local_pg_data:/var/lib/postgresql/data
+
+  local_redis:
+    image: redis:7-alpine
+    container_name: kali_local_redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-dev_redis_password}
+    ports:
+      - "6379:6379"
+
+volumes:
+  local_pg_data:
