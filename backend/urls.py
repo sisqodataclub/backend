@@ -5,30 +5,30 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
-from core.views import HealthCheckView, RateLimitExceededView
+from core.views import HealthCheckView, RateLimitExceededView, superset_dashboard_data
 
 urlpatterns = [
     # ============================================================================
     # 1. ADMIN INTERFACE (Tenant-aware via middleware)
     # ============================================================================
     path('admin/', admin.site.urls, name='admin'),
-    
-    # ============================================================================
-    # 2. API ENDPOINTS (Tenant-aware via middleware)
-    # ============================================================================
+
     # ============================================================================
     # 2. API ENDPOINTS (Tenant-aware via middleware)
     # ============================================================================
     path('api/', include('products.urls')),
     path('api/payments/', include('payments.urls')),
     
+    # NEW DASHBOARD ROUTE:
+    path('api/v1/dashboard/overview/', superset_dashboard_data, name='dashboard_overview'),
+
     # ============================================================================
     # 3. HEALTH & MONITORING (No tenant required)
     # ============================================================================
     path('health/', HealthCheckView.as_view(), name='health_check'),
     path('health/ready/', HealthCheckView.as_view(), name='health_ready'),
     path('health/live/', HealthCheckView.as_view(), name='health_live'),
-    
+
     # ============================================================================
     # 4. ERROR HANDLERS
     # ============================================================================
@@ -51,7 +51,7 @@ if settings.DEBUG:
     # Serve static/media files
     urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-    
+
     # Debug toolbar
     try:
         import debug_toolbar

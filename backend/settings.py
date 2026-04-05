@@ -82,6 +82,7 @@ REST_FRAMEWORK = {
     
     # Authentication
     'DEFAULT_AUTHENTICATION_CLASSES': [
+	'core.authentication.ClerkAuthentication',
         'rest_framework.authentication.SessionAuthentication',  # For Admin Panel
         'rest_framework.authentication.BasicAuthentication',    # For Testing/Scripts
     ],
@@ -512,3 +513,17 @@ STRIPE_WEBHOOK_SECRET = get_env_var('STRIPE_WEBHOOK_SECRET', '')
 # Stripe redirect URLs (update these to match your frontend)
 STRIPE_SUCCESS_URL = get_env_var('STRIPE_SUCCESS_URL', 'https://web.franciscodes.com/checkout/success')
 STRIPE_CANCEL_URL = get_env_var('STRIPE_CANCEL_URL', 'https://web.franciscodes.com/cart')
+
+
+
+# ==============================================================================
+# 14. SUPERSET & CLERK CONFIGURATION
+# ==============================================================================
+
+# Clerk Authentication (Dashboard)
+CLERK_JWKS_URL = get_env_var('CLERK_JWKS_URL', '')
+
+# Apache Superset (BI Engine)
+SUPERSET_URL = get_env_var('SUPERSET_URL', 'https://analytics.franciscodes.com')
+SUPERSET_ADMIN_USERNAME = get_env_var('SUPERSET_ADMIN_USERNAME', 'admin')
+SUPERSET_ADMIN_PASSWORD = get_env_var('SUPERSET_ADMIN_PASSWORD', '')
