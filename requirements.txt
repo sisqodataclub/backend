@@ -31,3 +31,5 @@ redis==5.0.1
 # ============================================
 requests==2.31.0  # Often needed for health checks or external APIs
 stripe==7.12.0  # Stripe payment processing                                                                                                                                                          
+
+cryptography>=41.0.0
