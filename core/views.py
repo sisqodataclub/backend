@@ -1,6 +1,8 @@
 """
 Core Views - Health Checks and Error Handling
 """
+
+from .umami_service import UmamiService
 from django.http import JsonResponse
 from django.views import View
 from django.utils import timezone
@@ -166,15 +168,15 @@ from rest_framework.response import Response
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def superset_dashboard_data(request):
-    """Securely fetches data from Superset for the logged-in user's tenant"""
+    """Securely fetches combined data from Superset and Umami for the dashboard."""
 
     if not hasattr(request, 'tenant') or not request.tenant:
         return Response({"error": "No active tenant associated with this token."}, status=403)
 
-    # In an enterprise environment, tenant data separation should be 
-    # handled by Superset's Row Level Security (RLS), not API filters.
     tenant_name = request.tenant.name
+    kpis = []
 
+    # --- 1. Fetch Superset Data ---
     login_payload = {
         "username": settings.SUPERSET_ADMIN_USERNAME,
         "password": settings.SUPERSET_ADMIN_PASSWORD,
@@ -182,7 +184,6 @@ def superset_dashboard_data(request):
     }
 
     try:
-        # 1. Authenticate with Superset to get the access token
         auth_response = requests.post(f"{settings.SUPERSET_URL}/api/v1/security/login", json=login_payload)
         auth_response.raise_for_status()
         access_token = auth_response.json().get("access_token")
@@ -192,27 +193,40 @@ def superset_dashboard_data(request):
             "Content-Type": "application/json"
         }
 
-        # 2. Fetch the data using a GET request (No JSON payload allowed here)
         data_response = requests.get(
             f"{settings.SUPERSET_URL}/api/v1/chart/1/data/",
             headers=headers
         )
         data_response.raise_for_status()
 
-        # 3. Safely parse the returning data
         raw_data = data_response.json().get('result', [{}])[0].get('data', [])
-        
-        # Depending on how your Superset chart is configured, the key might be 'count' or 'SUM(bookings)'
         count = raw_data[0].get('count', 0) if raw_data else 0
 
-        # 4. Return the formatted KPI to your React frontend
-        return Response({
-            "kpis": [
-                { "id": '1', "title": 'Total Bookings', "value": count, "change": 0, "prefix": "" }
-            ]
-        })
+        kpis.append({ "id": '1', "title": 'Total Bookings', "value": count, "change": 0, "prefix": "" })
 
     except requests.exceptions.RequestException as e:
-        return Response({"error": "Failed to communicate with BI engine", "details": str(e)}, status=502)
+        logger.error(f"Superset error: {str(e)}")
+        kpis.append({ "id": '1', "title": 'Total Bookings', "value": "Error", "change": 0, "prefix": "" })
     except Exception as e:
-        return Response({"error": "Internal server error", "details": str(e)}, status=500)
+        logger.error(f"Superset error: {str(e)}")
+        kpis.append({ "id": '1', "title": 'Total Bookings', "value": "Error", "change": 0, "prefix": "" })
+
+
+    # --- 2. Fetch Umami Data ---
+    umami_svc = UmamiService()
+    umami_stats = umami_svc.get_last_24h_stats()
+
+    if umami_stats:
+        pageviews = umami_stats.get("pageviews", {}).get("value", 0)
+        visitors = umami_stats.get("visitors", {}).get("value", 0)
+        
+        kpis.append({ "id": 'umami_1', "title": 'Page Views (24h)', "value": pageviews, "change": 0 })
+        kpis.append({ "id": 'umami_2', "title": 'Unique Visitors', "value": visitors, "change": 0 })
+    else:
+        kpis.append({ "id": 'umami_1', "title": 'Page Views (24h)', "value": "N/A", "change": 0 })
+        kpis.append({ "id": 'umami_2', "title": 'Unique Visitors', "value": "N/A", "change": 0 })
+
+    # --- 3. Return Combined Data ---
+    return Response({
+        "kpis": kpis
+    })

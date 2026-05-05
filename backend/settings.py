@@ -527,3 +527,9 @@ CLERK_JWKS_URL = get_env_var('CLERK_JWKS_URL', '')
 SUPERSET_URL = get_env_var('SUPERSET_URL', 'https://analytics.franciscodes.com')
 SUPERSET_ADMIN_USERNAME = get_env_var('SUPERSET_ADMIN_USERNAME', 'admin')
 SUPERSET_ADMIN_PASSWORD = get_env_var('SUPERSET_ADMIN_PASSWORD', '')
+
+
+UMAMI_API_URL = os.environ.get("UMAMI_API_URL", "https://analytics.ddeepcleaningservices.com")
+UMAMI_WEBSITE_ID = os.environ.get("UMAMI_WEBSITE_ID")
+UMAMI_USERNAME = os.environ.get("UMAMI_USERNAME")
+UMAMI_PASSWORD = os.environ.get("UMAMI_PASSWORD")
