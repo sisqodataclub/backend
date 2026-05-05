@@ -212,13 +212,18 @@ def superset_dashboard_data(request):
         kpis.append({ "id": '1', "title": 'Total Bookings', "value": "Error", "change": 0, "prefix": "" })
 
 
+
     # --- 2. Fetch Umami Data ---
     umami_svc = UmamiService()
     umami_stats = umami_svc.get_last_24h_stats()
 
     if umami_stats:
-        pageviews = umami_stats.get("pageviews", {}).get("value", 0)
-        visitors = umami_stats.get("visitors", {}).get("value", 0)
+        # Safely extract the data whether Umami returns a nested dict or a flat integer
+        pv_raw = umami_stats.get("pageviews", 0)
+        pageviews = pv_raw.get("value", 0) if isinstance(pv_raw, dict) else pv_raw
+        
+        vis_raw = umami_stats.get("visitors", 0)
+        visitors = vis_raw.get("value", 0) if isinstance(vis_raw, dict) else vis_raw
         
         kpis.append({ "id": 'umami_1', "title": 'Page Views (24h)', "value": pageviews, "change": 0 })
         kpis.append({ "id": 'umami_2', "title": 'Unique Visitors', "value": visitors, "change": 0 })
@@ -230,3 +235,6 @@ def superset_dashboard_data(request):
     return Response({
         "kpis": kpis
     })
+
+
+
