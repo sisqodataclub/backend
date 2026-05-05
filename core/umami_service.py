@@ -8,12 +8,14 @@ logger = logging.getLogger(__name__)
 
 class UmamiService:
     def __init__(self):
+        # Defaulting to your dedicated analytics domain
         self.api_url = getattr(settings, 'UMAMI_API_URL', "https://analytics.ddeepcleaningservices.com")
         self.website_id = getattr(settings, 'UMAMI_WEBSITE_ID', None)
         self.username = getattr(settings, 'UMAMI_USERNAME', None)
         self.password = getattr(settings, 'UMAMI_PASSWORD', None)
         
     def is_configured(self):
+        """Checks if all necessary environment variables are present."""
         return all([self.api_url, self.website_id, self.username, self.password])
 
     def _get_auth_token(self):
@@ -35,7 +37,8 @@ class UmamiService:
             token = response.json().get("token")
             
             if token:
-                cache.set(cache_key, token, 12 * 60 * 60) # Cache for 12 hours
+                # Cache the token for 12 hours (Umami tokens usually last 24h)
+                cache.set(cache_key, token, 12 * 60 * 60)
                 
             return token
             
@@ -44,7 +47,7 @@ class UmamiService:
             return None
 
     def get_last_24h_stats(self):
-        """Fetches the aggregate stats for the last 24 hours."""
+        """Fetches the aggregate stats (KPIs) for the last 24 hours."""
         if not self.is_configured():
             logger.warning("Umami service is missing credentials or website ID.")
             return None
@@ -70,5 +73,65 @@ class UmamiService:
             return response.json()
             
         except Exception as e:
-            logger.error(f"Failed to fetch Umami stats: {str(e)}")
+            logger.error(f"Failed to fetch Umami 24h stats: {str(e)}")
             return None
+
+    def get_traffic_timeline(self, days=7, unit="day"):
+        """Fetches pageviews/visitors. Unit can be dynamically set to 'day', 'hour', etc."""
+        if not self.is_configured():
+            return None
+            
+        token = self._get_auth_token()
+        if not token:
+            return None
+            
+        try:
+            end_at = int(time.time() * 1000)
+            start_at = end_at - (days * 24 * 60 * 60 * 1000)
+            
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+            
+            # Notice the {unit} variable dynamically placed in the URL
+            url = f"{self.api_url}/api/websites/{self.website_id}/pageviews?startAt={start_at}&endAt={end_at}&unit={unit}&timezone=Europe/London"
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            return response.json()
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch Umami timeline: {str(e)}")
+            return None
+
+    def get_metrics(self, metric_type="device", days=7):
+        """Fetches categorical metrics (device, os, browser, country) for Donut charts."""
+        if not self.is_configured():
+            return []
+            
+        token = self._get_auth_token()
+        if not token:
+            return []
+            
+        try:
+            end_at = int(time.time() * 1000)
+            start_at = end_at - (days * 24 * 60 * 60 * 1000)
+            
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+            
+            # Hit the /metrics endpoint for categorical breakdown
+            url = f"{self.api_url}/api/websites/{self.website_id}/metrics?startAt={start_at}&endAt={end_at}&type={metric_type}"
+            
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            return response.json()
+            
+        except Exception as e:
+            logger.error(f"Failed to fetch Umami {metric_type} metrics: {str(e)}")
+            return []

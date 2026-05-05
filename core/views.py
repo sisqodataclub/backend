@@ -160,10 +160,16 @@ def csrf_failure(request, reason=""):
 # SUPERSET PROXY VIEWS (Dashboard API)
 # ============================================================================
 import requests
+import logging
+from datetime import datetime
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+
+from .umami_service import UmamiService
+
+logger = logging.getLogger(__name__)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -212,29 +218,92 @@ def superset_dashboard_data(request):
         kpis.append({ "id": '1', "title": 'Total Bookings', "value": "Error", "change": 0, "prefix": "" })
 
 
-
-    # --- 2. Fetch Umami Data ---
+    # --- 2. Initialize Umami Service ---
     umami_svc = UmamiService()
+
+
+    # --- 3. Fetch Umami 24h KPIs ---
     umami_stats = umami_svc.get_last_24h_stats()
 
     if umami_stats:
-        # Safely extract the data whether Umami returns a nested dict or a flat integer
         pv_raw = umami_stats.get("pageviews", 0)
         pageviews = pv_raw.get("value", 0) if isinstance(pv_raw, dict) else pv_raw
-        
+
         vis_raw = umami_stats.get("visitors", 0)
         visitors = vis_raw.get("value", 0) if isinstance(vis_raw, dict) else vis_raw
-        
+
         kpis.append({ "id": 'umami_1', "title": 'Page Views (24h)', "value": pageviews, "change": 0 })
         kpis.append({ "id": 'umami_2', "title": 'Unique Visitors', "value": visitors, "change": 0 })
     else:
         kpis.append({ "id": 'umami_1', "title": 'Page Views (24h)', "value": "N/A", "change": 0 })
         kpis.append({ "id": 'umami_2', "title": 'Unique Visitors', "value": "N/A", "change": 0 })
 
-    # --- 3. Return Combined Data ---
+
+    # --- 4. Fetch Dynamic Timeline based on React's request ---
+    # Default to 7 Days if React doesn't ask for a specific preset
+    preset = request.GET.get('preset', '7D')
+    
+    if preset == '24h':
+        chart_days = 1
+        chart_unit = 'hour'
+    elif preset == '30D':
+        chart_days = 30
+        chart_unit = 'day'
+    elif preset == 'This Year':
+        chart_days = 365
+        chart_unit = 'month'
+    else: # Default 7D
+        chart_days = 7
+        chart_unit = 'day'
+
+    timeline_raw = umami_svc.get_traffic_timeline(days=chart_days, unit=chart_unit)
+    chart_data = []
+
+    if timeline_raw:
+        # Group the data based on the requested unit
+        pv_dict = {item['x'][:10] if chart_unit != 'hour' else item['x']: item['y'] for item in timeline_raw.get('pageviews', [])}
+        vis_dict = {item['x'][:10] if chart_unit != 'hour' else item['x']: item['y'] for item in timeline_raw.get('sessions', [])}
+        
+        all_dates = sorted(list(set(list(pv_dict.keys()) + list(vis_dict.keys()))))
+        
+        for date_str in all_dates:
+            try:
+                # Format the date string perfectly for the frontend chart
+                if chart_unit == 'hour':
+                    dt = datetime.fromisoformat(date_str.replace('Z', '+00:00')) if 'T' in date_str else datetime.strptime(date_str[:13], '%Y-%m-%d %H')
+                    formatted_date = dt.strftime('%H:00')
+                elif chart_unit == 'month':
+                    dt = datetime.strptime(date_str[:10], '%Y-%m-%d')
+                    formatted_date = dt.strftime('%b %Y') # e.g. "Oct 2023"
+                else:
+                    dt = datetime.strptime(date_str[:10], '%Y-%m-%d')
+                    formatted_date = dt.strftime('%a %d') if chart_days > 7 else dt.strftime('%a') # e.g. "Mon 24" or just "Mon"
+                    
+                chart_data.append({
+                    "date": formatted_date,
+                    "views": pv_dict.get(date_str, 0),
+                    "visitors": vis_dict.get(date_str, 0)
+                })
+            except Exception:
+                continue
+
+
+    # --- 5. Fetch Device Metrics for Donut Chart ---
+    # We keep this at 7 days by default, or you can also pass `days=chart_days` here if you want it to match!
+    device_raw = umami_svc.get_metrics(metric_type="device", days=7)
+    device_data = []
+
+    if device_raw:
+        for item in device_raw:
+            device_data.append({
+                "name": str(item.get("x", "Unknown")).capitalize(),
+                "value": item.get("y", 0)
+            })
+
+
+    # --- 6. Return Combined Payload ---
     return Response({
-        "kpis": kpis
+        "kpis": kpis,
+        "traffic_chart": chart_data,   # Now sending just ONE dynamically formatted chart
+        "device_chart": device_data
     })
-
-
-
