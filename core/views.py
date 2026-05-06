@@ -160,11 +160,13 @@ def csrf_failure(request, reason=""):
 # SUPERSET PROXY VIEWS (Dashboard API)
 # ============================================================================
 # ============================================================================
+# ============================================================================
 # SUPERSET PROXY VIEWS (Dashboard API)
 # ============================================================================
 import requests
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+from collections import defaultdict
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -186,8 +188,33 @@ def superset_dashboard_data(request):
     preset = request.GET.get('preset', '7D')
     chart_unit = request.GET.get('unit', 'day')
     is_comparing = request.GET.get('compare') == 'true'
-    compare_type = request.GET.get('compareType', 'prev_period') # 'prev_period' or 'prev_year'
+    compare_type = request.GET.get('compareType', 'prev_period')
 
+    # Catch custom dates from React
+    custom_start_date = request.GET.get('startDate')
+    custom_end_date = request.GET.get('endDate')
+
+    custom_start_at = None
+    custom_end_at = None
+    chart_days = 7 # Default fallback
+
+    # Parse Custom Dates
+    if preset == 'Custom' and custom_start_date and custom_end_date:
+        try:
+            dt_start = datetime.strptime(custom_start_date, '%Y-%m-%d')
+            dt_end = datetime.strptime(custom_end_date, '%Y-%m-%d')
+            # Make the end date inclusive by shifting it to the end of the day
+            dt_end = dt_end.replace(hour=23, minute=59, second=59)
+
+            custom_start_at = int(dt_start.timestamp() * 1000)
+            custom_end_at = int(dt_end.timestamp() * 1000)
+            
+            diff = dt_end - dt_start
+            chart_days = max(1, diff.days)
+        except Exception:
+            preset = '7D' # Safety fallback if date string format is corrupted
+
+    # Standard Presets
     if preset == '24h':
         chart_days = 1
         chart_unit = 'hour'
@@ -195,7 +222,7 @@ def superset_dashboard_data(request):
         chart_days = 30
     elif preset == 'This Year':
         chart_days = 365
-    else: # Default 7D
+    elif preset == '7D':
         chart_days = 7
 
     kpis = []
@@ -228,9 +255,6 @@ def superset_dashboard_data(request):
 
         kpis.append({ "id": '1', "title": 'Total Bookings', "value": count, "change": 0, "prefix": "" })
 
-    except requests.exceptions.RequestException as e:
-        logger.error(f"Superset error: {str(e)}")
-        kpis.append({ "id": '1', "title": 'Total Bookings', "value": "Error", "change": 0, "prefix": "" })
     except Exception as e:
         logger.error(f"Superset error: {str(e)}")
         kpis.append({ "id": '1', "title": 'Total Bookings', "value": "Error", "change": 0, "prefix": "" })
@@ -240,9 +264,14 @@ def superset_dashboard_data(request):
     umami_svc = UmamiService()
 
 
-    # --- 3. Fetch Umami KPIs (Globally Filtered) ---
-    umami_stats = umami_svc.get_stats(days=chart_days)
-    time_label = f"({preset})"
+    # --- 3. Fetch Umami KPIs ---
+    umami_stats = umami_svc.get_stats(days=chart_days, custom_start_at=custom_start_at, custom_end_at=custom_end_at)
+    
+    # Format the KPI label nicely for custom dates
+    if preset == 'Custom' and custom_start_date and custom_end_date:
+        time_label = f"({datetime.strptime(custom_start_date, '%Y-%m-%d').strftime('%b %d')} - {datetime.strptime(custom_end_date, '%Y-%m-%d').strftime('%b %d')})"
+    else:
+        time_label = f"({preset})"
 
     if umami_stats:
         pv_raw = umami_stats.get("pageviews", 0)
@@ -258,61 +287,96 @@ def superset_dashboard_data(request):
         kpis.append({ "id": 'umami_2', "title": f'Unique Visitors {time_label}', "value": "N/A", "change": 0 })
 
 
-    # --- 4. Fetch Dynamic Timeline (With Comparison Logic) ---
+    # --- 4. Fetch Dynamic Timeline (With Manual Weekly Aggregation) ---
+    # Umami does not natively support 'week'. We must fetch 'day' and group it ourselves.
+    umami_query_unit = 'day' if chart_unit == 'week' else chart_unit
+
     # Fetch Current Period
-    timeline_raw = umami_svc.get_traffic_timeline(days=chart_days, unit=chart_unit, offset_days=0)
-    
-    # Fetch Previous Period (only if requested)
+    timeline_raw = umami_svc.get_traffic_timeline(
+        days=chart_days, unit=umami_query_unit, offset_days=0,
+        custom_start_at=custom_start_at, custom_end_at=custom_end_at
+    )
+
+    # Fetch Previous Period
     prev_timeline_raw = None
     if is_comparing:
         offset = chart_days if compare_type == 'prev_period' else 365
-        prev_timeline_raw = umami_svc.get_traffic_timeline(days=chart_days, unit=chart_unit, offset_days=offset)
+        prev_timeline_raw = umami_svc.get_traffic_timeline(
+            days=chart_days, unit=umami_query_unit, offset_days=offset,
+            custom_start_at=custom_start_at, custom_end_at=custom_end_at
+        )
 
     chart_data = []
 
+    # Helper function to group data and handle weekly math
+    def aggregate_data(raw_data, is_weekly):
+        pvs = defaultdict(int)
+        viss = defaultdict(int)
+        if not raw_data: return pvs, viss
+
+        for item in raw_data.get('pageviews', []):
+            key = item['x']
+            if is_weekly and len(key) >= 10:
+                dt = datetime.strptime(key[:10], '%Y-%m-%d')
+                monday = dt - timedelta(days=dt.weekday()) # Roll back to the nearest Monday
+                key = monday.strftime('%Y-%m-%d')
+            pvs[key] += item['y']
+
+        for item in raw_data.get('sessions', []):
+            key = item['x']
+            if is_weekly and len(key) >= 10:
+                dt = datetime.strptime(key[:10], '%Y-%m-%d')
+                monday = dt - timedelta(days=dt.weekday()) # Roll back to the nearest Monday
+                key = monday.strftime('%Y-%m-%d')
+            viss[key] += item['y']
+
+        return dict(pvs), dict(viss)
+
     if timeline_raw:
-        pv_dict = {item['x']: item['y'] for item in timeline_raw.get('pageviews', [])}
-        vis_dict = {item['x']: item['y'] for item in timeline_raw.get('sessions', [])}
-        
+        is_weekly = (chart_unit == 'week')
+        pv_dict, vis_dict = aggregate_data(timeline_raw, is_weekly)
+
         all_dates = sorted(list(set(list(pv_dict.keys()) + list(vis_dict.keys()))))
-        
-        # Prepare historical arrays for zippering
+
+        # Process historical arrays
         prev_pvs = []
         prev_vis = []
         if prev_timeline_raw:
-            prev_pv_dict = {item['x']: item['y'] for item in prev_timeline_raw.get('pageviews', [])}
-            prev_vis_dict = {item['x']: item['y'] for item in prev_timeline_raw.get('sessions', [])}
+            prev_pv_dict, prev_vis_dict = aggregate_data(prev_timeline_raw, is_weekly)
             prev_pvs = [prev_pv_dict[k] for k in sorted(prev_pv_dict.keys())]
             prev_vis = [prev_vis_dict[k] for k in sorted(prev_vis_dict.keys())]
 
-        # Process and zipper the data together
+        # Zipper the arrays together
         for i, date_str in enumerate(all_dates):
             try:
-                # Safe Parsing
                 if 'T' in date_str:
                     dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                elif len(date_str) >= 19:
-                    dt = datetime.strptime(date_str[:19], '%Y-%m-%d %H:%M:%S')
+                elif chart_unit == 'hour':
+                    dt = datetime.strptime(date_str[:13], '%Y-%m-%d %H')
                 else:
                     dt = datetime.strptime(date_str[:10], '%Y-%m-%d')
-                
-                # Dynamic Label Formatting based on unit requested by React
-                if chart_unit == 'hour': 
-                    formatted_date = dt.strftime('%H:00')
-                elif chart_unit == 'month': 
+
+                # Smart Label Formatting
+                if chart_unit == 'hour':
+                    if chart_days == 1:
+                        formatted_date = dt.strftime('%H:00')
+                    elif chart_days <= 7:
+                        formatted_date = dt.strftime('%a %H:00')
+                    else:
+                        formatted_date = dt.strftime('%b %d, %H:00')
+                elif chart_unit == 'month':
                     formatted_date = dt.strftime('%b %Y')
-                elif chart_unit == 'week': 
+                elif chart_unit == 'week':
                     formatted_date = f"Week of {dt.strftime('%b %d')}"
-                else: 
+                else:
                     formatted_date = dt.strftime('%b %d') if chart_days > 7 else dt.strftime('%a')
-                
+
                 data_point = {
                     "date": formatted_date,
                     "views": pv_dict.get(date_str, 0),
                     "visitors": vis_dict.get(date_str, 0)
                 }
 
-                # Zipper historical data to the exact same day index
                 if is_comparing:
                     data_point["prevViews"] = prev_pvs[i] if i < len(prev_pvs) else 0
                     data_point["prevVisitors"] = prev_vis[i] if i < len(prev_vis) else 0
@@ -322,8 +386,8 @@ def superset_dashboard_data(request):
                 continue
 
 
-    # --- 5. Fetch Device Metrics (Globally Filtered) ---
-    device_raw = umami_svc.get_metrics(metric_type="device", days=chart_days)
+    # --- 5. Fetch Device Metrics ---
+    device_raw = umami_svc.get_metrics(metric_type="device", days=chart_days, custom_start_at=custom_start_at, custom_end_at=custom_end_at)
     device_data = []
 
     if device_raw:
@@ -334,7 +398,6 @@ def superset_dashboard_data(request):
             })
 
 
-    # --- 6. Return Combined Payload ---
     return Response({
         "kpis": kpis,
         "traffic_chart": chart_data,

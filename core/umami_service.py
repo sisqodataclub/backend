@@ -27,7 +27,6 @@ class UmamiService:
             return token
 
         try:
-            # Login to Umami using standard Username and Password
             response = requests.post(f"{self.api_url}/api/auth/login", json={
                 "username": self.username,
                 "password": self.password
@@ -37,7 +36,6 @@ class UmamiService:
             token = response.json().get("token")
 
             if token:
-                # Cache the token for 12 hours (Umami tokens usually last 24h)
                 cache.set(cache_key, token, 12 * 60 * 60)
 
             return token
@@ -46,8 +44,8 @@ class UmamiService:
             logger.error(f"Failed to authenticate with Umami: {str(e)}")
             return None
 
-    def get_stats(self, days=1):
-        """Fetches the aggregate stats (KPIs) for a dynamic number of days."""
+    def get_stats(self, days=1, custom_start_at=None, custom_end_at=None):
+        """Fetches aggregate stats. Uses exact ms timestamps if provided, otherwise calculates from days."""
         if not self.is_configured():
             logger.warning("Umami service is missing credentials or website ID.")
             return None
@@ -57,8 +55,9 @@ class UmamiService:
             return None
 
         try:
-            end_at = int(time.time() * 1000)
-            start_at = end_at - (days * 24 * 60 * 60 * 1000)
+            # Prefer custom timestamps; otherwise fallback to rolling 'days' calculation
+            end_at = custom_end_at if custom_end_at else int(time.time() * 1000)
+            start_at = custom_start_at if custom_start_at else end_at - (days * 24 * 60 * 60 * 1000)
 
             headers = {
                 "Authorization": f"Bearer {token}",
@@ -73,11 +72,11 @@ class UmamiService:
             return response.json()
 
         except Exception as e:
-            logger.error(f"Failed to fetch Umami stats for {days} days: {str(e)}")
+            logger.error(f"Failed to fetch Umami stats: {str(e)}")
             return None
 
-    def get_traffic_timeline(self, days=7, unit="day", offset_days=0):
-        """Fetches pageviews/visitors. offset_days pushes the date window back in time."""
+    def get_traffic_timeline(self, days=7, unit="day", offset_days=0, custom_start_at=None, custom_end_at=None):
+        """Fetches pageviews/visitors timeline. Includes historical offset math for comparison."""
         if not self.is_configured():
             return None
 
@@ -86,17 +85,19 @@ class UmamiService:
             return None
 
         try:
-            # Step 1: Calculate the end point, shifted back by the offset
-            end_at = int(time.time() * 1000) - (offset_days * 24 * 60 * 60 * 1000)
-            # Step 2: Calculate the start point based on the requested days
-            start_at = end_at - (days * 24 * 60 * 60 * 1000)
+            # 1. Determine the base date range
+            base_end = custom_end_at if custom_end_at else int(time.time() * 1000)
+            base_start = custom_start_at if custom_start_at else base_end - (days * 24 * 60 * 60 * 1000)
+
+            # 2. Shift the window backwards in time if an offset is requested (for comparison)
+            end_at = base_end - (offset_days * 24 * 60 * 60 * 1000)
+            start_at = base_start - (offset_days * 24 * 60 * 60 * 1000)
 
             headers = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json"
             }
 
-            # Notice the {unit} variable dynamically placed in the URL
             url = f"{self.api_url}/api/websites/{self.website_id}/pageviews?startAt={start_at}&endAt={end_at}&unit={unit}&timezone=Europe/London"
 
             response = requests.get(url, headers=headers, timeout=10)
@@ -108,8 +109,8 @@ class UmamiService:
             logger.error(f"Failed to fetch Umami timeline: {str(e)}")
             return None
 
-    def get_metrics(self, metric_type="device", days=7):
-        """Fetches categorical metrics (device, os, browser, country) for Donut charts."""
+    def get_metrics(self, metric_type="device", days=7, custom_start_at=None, custom_end_at=None):
+        """Fetches categorical metrics (device, os, etc.) inside the dynamic date range."""
         if not self.is_configured():
             return []
 
@@ -118,15 +119,14 @@ class UmamiService:
             return []
 
         try:
-            end_at = int(time.time() * 1000)
-            start_at = end_at - (days * 24 * 60 * 60 * 1000)
+            end_at = custom_end_at if custom_end_at else int(time.time() * 1000)
+            start_at = custom_start_at if custom_start_at else end_at - (days * 24 * 60 * 60 * 1000)
 
             headers = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json"
             }
 
-            # Hit the /metrics endpoint for categorical breakdown
             url = f"{self.api_url}/api/websites/{self.website_id}/metrics?startAt={start_at}&endAt={end_at}&type={metric_type}"
 
             response = requests.get(url, headers=headers, timeout=10)
