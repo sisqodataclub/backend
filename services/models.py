@@ -2,7 +2,6 @@ from datetime import timedelta
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from core.models import TenantMixin  # adjust if your base model has a different name
 from products.models import Product
 
 User = get_user_model()
