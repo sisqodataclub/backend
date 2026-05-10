@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, timedelta
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -8,8 +8,8 @@ from django.utils import timezone
 
 from .models import Service, ServiceBooking, ServiceProvider
 from .serializers import (
-    ServiceSerializer, 
-    ServiceBookingSerializer, 
+    ServiceSerializer,
+    ServiceBookingSerializer,
     CreateServiceBookingSerializer,
     AvailableSlotSerializer
 )
@@ -23,7 +23,7 @@ class ServiceViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # multi-tenant filtering – assume tenant_id is in the request
+        # multi-tenant filtering – assume tenant_id is attached by middleware
         return self.queryset.filter(tenant_id=self.request.tenant.id)
 
     @action(detail=True, methods=['get'])
@@ -31,13 +31,14 @@ class ServiceViewSet(ModelViewSet):
         service = self.get_object()
         date_str = request.query_params.get('date')
         provider_id = request.query_params.get('provider_id')
+
         if not date_str:
             return Response({"error": "date parameter required"}, status=400)
+
         try:
-            # Parse date from ISO format (YYYY-MM-DD)
-            date = datetime.strptime(date_str, '%Y-%m-%d').date()
-            # Create a datetime at start of day in current timezone
-            date = timezone.make_aware(datetime.combine(date, datetime.min.time()))
+            # parse YYYY-MM-DD and make datetime at start of day
+            naive_date = datetime.strptime(date_str, '%Y-%m-%d')
+            date = timezone.make_aware(naive_date)
         except Exception:
             return Response({"error": "Invalid date format. Use YYYY-MM-DD"}, status=400)
 
@@ -55,13 +56,16 @@ class ServiceBookingViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        user = self.request.user
+        # staff can see all bookings for the tenant; regular users see only their own
+        if user.is_staff:
+            return ServiceBooking.objects.filter(tenant_id=self.request.tenant.id)
         return ServiceBooking.objects.filter(
             tenant_id=self.request.tenant.id,
-            customer__user=self.request.user
+            customer_email=user.email
         )
 
     def create(self, request, *args, **kwargs):
-        # Use custom serializer for creation
         create_serializer = CreateServiceBookingSerializer(data=request.data)
         create_serializer.is_valid(raise_exception=True)
         data = create_serializer.validated_data
@@ -70,29 +74,28 @@ class ServiceBookingViewSet(ModelViewSet):
         start = data['start_time']
         end = start + timedelta(minutes=service.duration_minutes)
 
-        # Check availability again
+        # double-check availability (prevent race conditions)
         slots = get_available_slots(
-            service.id, 
-            start, 
-            request.tenant.id, 
+            service.id,
+            start,
+            request.tenant.id,
             data.get('provider_id')
         )
-        # Compare start times (as datetime objects)
         if not any(slot['start'] == start for slot in slots):
             return Response({"error": "Slot no longer available"}, status=409)
 
-        # Assign provider automatically if none provided
         provider_id = data.get('provider_id')
         if not provider_id and service.any_staff_can_serve:
             matching_slot = next(s for s in slots if s['start'] == start)
             provider_id = matching_slot['provider_ids'][0]
 
-        # Create service booking in pending state
+        # create booking with direct customer fields (no Customer model)
         booking = ServiceBooking.objects.create(
             tenant=request.tenant,
             service=service,
             provider_id=provider_id,
-            customer=request.user.customer,  # assumes a OneToOne relation
+            customer_email=data['customer_email'],
+            customer_name=data.get('customer_name', ''),
             start_time=start,
             end_time=end,
             total_price=service.calculate_price(),
@@ -100,7 +103,7 @@ class ServiceBookingViewSet(ModelViewSet):
             customer_notes=data.get('customer_notes', '')
         )
 
-        # Create Stripe PaymentIntent (manual capture)
+        # create Stripe PaymentIntent (manual capture)
         payment_intent = create_service_payment_intent(booking)
         booking.stripe_payment_intent_id = payment_intent.id
         booking.save(update_fields=['stripe_payment_intent_id'])
@@ -115,8 +118,6 @@ class ServiceBookingViewSet(ModelViewSet):
         booking = self.get_object()
         if booking.status != 'pending':
             return Response({"error": "Booking cannot be confirmed"}, status=400)
-        # In a real flow, you would confirm the PaymentIntent on the client side.
-        # This endpoint would be called after successful payment confirmation.
         booking.status = 'confirmed'
         booking.save()
         return Response({"status": "confirmed"})
@@ -128,5 +129,4 @@ class ServiceBookingViewSet(ModelViewSet):
             return Response({"error": "Cannot cancel this booking"}, status=400)
         booking.status = 'cancelled'
         booking.save()
-        # Optionally refund the payment intent here
         return Response({"status": "cancelled"})

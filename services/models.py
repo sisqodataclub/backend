@@ -72,7 +72,6 @@ class ServiceProvider(models.Model):
 
 
 class ServiceBooking(models.Model):
-    """Booking/appointment for a time-based service."""
     STATUS_CHOICES = [
         ('pending', 'Pending payment'),
         ('confirmed', 'Confirmed'),
@@ -85,13 +84,26 @@ class ServiceBooking(models.Model):
     tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
     service = models.ForeignKey(Service, on_delete=models.PROTECT)
     provider = models.ForeignKey(ServiceProvider, on_delete=models.SET_NULL, null=True, blank=True)
-    customer = models.ForeignKey('customers.Customer', on_delete=models.CASCADE)
+
+    # Customer info (direct fields, like e-commerce Booking)
+    customer_email = models.EmailField()
+    customer_name = models.CharField(max_length=200, blank=True)
+
+    # Booking times
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
+
+    # Status & pricing
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
+
+    # Stripe
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True)
+
+    # Notes
     customer_notes = models.TextField(blank=True)
+
+    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -99,13 +111,12 @@ class ServiceBooking(models.Model):
         ordering = ['-start_time']
         indexes = [
             models.Index(fields=['tenant', 'start_time']),
-            models.Index(fields=['customer', 'status']),
+            models.Index(fields=['customer_email', 'status']),
         ]
 
     def clean(self):
         if self.start_time >= self.end_time:
             raise ValidationError("End time must be after start time")
-        # Check duration matches the service
         expected_end = self.start_time + timedelta(minutes=self.service.duration_minutes)
         if self.end_time != expected_end:
             raise ValidationError(f"End time must be {expected_end} for this service duration")
@@ -117,4 +128,4 @@ class ServiceBooking(models.Model):
         super().save(*args, **kwargs)
 
     def __str__(self):
-        return f"ServiceBooking #{self.id} - {self.service.name} ({self.start_time})"
+        return f"ServiceBooking #{self.id} - {self.service.name} for {self.customer_email}"
