@@ -367,3 +367,41 @@ The Team
     
     except Exception as e:
         logger.error(f"Error sending confirmation email: {str(e)}")
+
+
+
+# ============================================================================
+# SERVICE BOOKING PAYMENT INTEGRATION (manual capture)
+# ============================================================================
+from django.shortcuts import get_object_or_404
+from rest_framework.permissions import IsAuthenticated
+from services.models import ServiceBooking
+
+def create_service_payment_intent(booking: ServiceBooking):
+    """
+    Create a Stripe PaymentIntent for a service booking.
+    Uses manual capture so you can charge only after service is completed.
+    """
+    intent = stripe.PaymentIntent.create(
+        amount=int(booking.total_price * 100),  # cents
+        currency='usd',
+        capture_method='manual',
+        metadata={
+            'booking_id': booking.id,
+            'service_id': booking.service.id,
+            'tenant_id': booking.tenant.id,
+            'type': 'service_booking'
+        },
+        description=f"Booking for {booking.service.name} on {booking.start_time.isoformat()}",
+    )
+    return intent
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def capture_service_payment(request, booking_id):
+    """Manually capture payment after service is completed"""
+    booking = get_object_or_404(ServiceBooking, id=booking_id, tenant=request.tenant)
+    if booking.status != 'completed':
+        return Response({"error": "Service not yet marked as completed"}, status=400)
+    intent = stripe.PaymentIntent.capture(booking.stripe_payment_intent_id)
+    return Response({"status": "payment captured", "payment_intent_id": intent.id})
