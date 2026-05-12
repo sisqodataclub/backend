@@ -5,8 +5,8 @@ from .models import Service, ServiceProvider, ServiceBooking
 
 @admin.register(Service)
 class ServiceAdmin(admin.ModelAdmin):
-    list_display = ('name', 'price_fixed', 'price_per_hour', 'duration_minutes')
-    list_filter = ('is_active', 'requires_assigned_staff')
+    list_display = ('name', 'price_fixed', 'price_per_hour', 'duration_minutes', 'is_active')
+    list_filter = ('is_active', 'requires_assigned_staff', 'tenant')
     search_fields = ('name',)
 
 

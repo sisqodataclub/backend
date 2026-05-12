@@ -2,33 +2,42 @@ from datetime import timedelta
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from products.models import Product
 
 User = get_user_model()
 
 
-class Service(Product):
+class Service(models.Model):
     """
-    Extends the existing Product model for time-based services.
-    Uses multi-table inheritance.
+    Standalone Service model – not inherited from Product.
     """
+    # Tenant (multi‑tenant support)
+    tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
+
+    # Basic info
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True)
+
     # Time attributes
     duration_minutes = models.PositiveIntegerField(help_text="How long the service takes")
     buffer_before = models.PositiveIntegerField(default=0, help_text="Preparation time after booking")
     buffer_after = models.PositiveIntegerField(default=0, help_text="Cleanup time after service")
     max_clients_per_slot = models.PositiveIntegerField(default=1)
 
-    # Staff / provider
+    # Staff assignment
     requires_assigned_staff = models.BooleanField(default=True)
-    any_staff_can_serve = models.BooleanField(default=True)  # if True, auto-assign
+    any_staff_can_serve = models.BooleanField(default=True)
 
-    # Pricing model
+    # Pricing
     price_fixed = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     price_per_hour = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
 
     # Location
     is_remote = models.BooleanField(default=False)
     address_required = models.BooleanField(default=False)
+
+    # Optional image
+    image_url = models.URLField(blank=True, help_text="Service image")
 
     class Meta:
         verbose_name = "Service"
@@ -53,13 +62,10 @@ class Service(Product):
 
 
 class ServiceProvider(models.Model):
-    """Stores which staff members can provide which services."""
     tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='service_provider')
     service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='providers')
     is_active = models.BooleanField(default=True)
-
-    # Weekly schedule stored as JSON: {"0": [{"start":"09:00","end":"17:00"}], ...}
     weekly_availability = models.JSONField(default=dict, help_text="Day 0-6 -> list of time slots")
 
     class Meta:
@@ -85,25 +91,18 @@ class ServiceBooking(models.Model):
     service = models.ForeignKey(Service, on_delete=models.PROTECT)
     provider = models.ForeignKey(ServiceProvider, on_delete=models.SET_NULL, null=True, blank=True)
 
-    # Customer info (direct fields, like e-commerce Booking)
     customer_email = models.EmailField()
     customer_name = models.CharField(max_length=200, blank=True)
 
-    # Booking times
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
 
-    # Status & pricing
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     total_price = models.DecimalField(max_digits=10, decimal_places=2)
 
-    # Stripe
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True)
-
-    # Notes
     customer_notes = models.TextField(blank=True)
 
-    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
