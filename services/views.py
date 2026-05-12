@@ -20,7 +20,7 @@ from payments.views import create_service_payment_intent
 class ServiceViewSet(ModelViewSet):
     queryset = Service.objects.all()
     serializer_class = ServiceSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
         # multi-tenant filtering – assume tenant_id is attached by middleware
