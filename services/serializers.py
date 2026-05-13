@@ -1,8 +1,18 @@
 from rest_framework import serializers
-from .models import Service, ServiceProvider, ServiceBooking
+from .models import Service, ServiceProvider, ServiceBooking, ServiceCategory
+
+# ✅ NEW: Serializer for the Category model
+class ServiceCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServiceCategory
+        fields = ['id', 'name', 'description', 'image_url', 'display_order', 'is_active']
 
 
 class ServiceSerializer(serializers.ModelSerializer):
+    # ✅ NEW: This embeds the category data (like name and image) right into the Service response
+    category_detail = ServiceCategorySerializer(source='category', read_only=True)
+    category_name = serializers.CharField(source='category.name', read_only=True, default="Uncategorized")
+
     class Meta:
         model = Service
         fields = '__all__'

@@ -6,17 +6,54 @@ from django.core.exceptions import ValidationError
 User = get_user_model()
 
 
+# ==========================================
+# NEW: Service Category Model
+# ==========================================
+class ServiceCategory(models.Model):
+    tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
+    name = models.CharField(max_length=100)
+    description = models.TextField(blank=True)
+    image_url = models.URLField(blank=True, help_text="Category cover image")
+    display_order = models.PositiveIntegerField(default=0, help_text="Order in which it appears on the frontend")
+    is_active = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = "Service Category"
+        verbose_name_plural = "Service Categories"
+        ordering = ['display_order', 'name']
+        constraints = [
+            models.UniqueConstraint(fields=['tenant', 'name'], name='unique_tenant_category')
+        ]
+
+    def __str__(self):
+        return self.name
+
+
+# ==========================================
+# UPDATED: Service Model (with category, ordering, addon flag)
+# ==========================================
 class Service(models.Model):
-    """
-    Standalone Service model – not inherited from Product.
-    """
-    # Tenant (multi‑tenant support)
     tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
 
-    # Basic info
+    # NEW: Link to Category
+    category = models.ForeignKey(
+        ServiceCategory,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='services'
+    )
+
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
+
+    # NEW: Display & Logic fields
+    display_order = models.PositiveIntegerField(default=0)
+    is_addon_only = models.BooleanField(
+        default=False,
+        help_text="If True, cannot be booked alone (e.g., 'Inside Fridge')"
+    )
 
     # Time attributes
     duration_minutes = models.PositiveIntegerField(help_text="How long the service takes")
@@ -42,6 +79,7 @@ class Service(models.Model):
     class Meta:
         verbose_name = "Service"
         verbose_name_plural = "Services"
+        ordering = ['category__display_order', 'display_order', 'name']
 
     def clean(self):
         if not self.price_fixed and not self.price_per_hour:
@@ -58,9 +96,13 @@ class Service(models.Model):
         return 0
 
     def __str__(self):
-        return self.name
+        cat_prefix = f"[{self.category.name}] " if self.category else ""
+        return f"{cat_prefix}{self.name}"
 
 
+# ==========================================
+# ServiceProvider (unchanged)
+# ==========================================
 class ServiceProvider(models.Model):
     tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='service_provider')
@@ -77,6 +119,9 @@ class ServiceProvider(models.Model):
         return f"{self.user.email} - {self.service.name}"
 
 
+# ==========================================
+# ServiceBooking (unchanged)
+# ==========================================
 class ServiceBooking(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Pending payment'),
