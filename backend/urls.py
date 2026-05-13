@@ -17,7 +17,7 @@ urlpatterns = [
     # 2. API ENDPOINTS (Tenant-aware via middleware)
     # ============================================================================
     path('api/', include('products.urls')),
-    path('api/', include('services.urls')),  # 👈 ADD THIS LINE
+    path('api/', include('services.urls')),  # 👈 ADD THIS LINE updated
     path('api/payments/', include('payments.urls')),
     
     # NEW DASHBOARD ROUTE:
