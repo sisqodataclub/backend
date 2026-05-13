@@ -1,8 +1,9 @@
+import logging
 from datetime import datetime, timedelta
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework import permissions  # ✅ FIXED: Imported permissions module
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
@@ -16,6 +17,8 @@ from .serializers import (
 from .availability import get_available_slots
 from payments.views import create_service_payment_intent
 
+logger = logging.getLogger(__name__)
+
 
 class ServiceViewSet(ModelViewSet):
     queryset = Service.objects.all()
@@ -23,7 +26,11 @@ class ServiceViewSet(ModelViewSet):
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
-        # multi-tenant filtering – assume tenant_id is attached by middleware
+        """✅ SECURE: Tenant-filtered queryset with fail-safes"""
+        if not hasattr(self.request, 'tenant') or not self.request.tenant:
+            logger.warning("ServiceViewSet accessed without tenant context")
+            return Service.objects.none()
+
         return self.queryset.filter(tenant_id=self.request.tenant.id)
 
     @action(detail=True, methods=['get'])
@@ -53,13 +60,20 @@ class ServiceViewSet(ModelViewSet):
 
 class ServiceBookingViewSet(ModelViewSet):
     serializer_class = ServiceBookingSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        """✅ SECURE: Tenant-filtered queryset with fail-safes"""
+        if not hasattr(self.request, 'tenant') or not self.request.tenant:
+            logger.warning("ServiceBookingViewSet accessed without tenant context")
+            return ServiceBooking.objects.none()
+
         user = self.request.user
+        
         # staff can see all bookings for the tenant; regular users see only their own
         if user.is_staff:
             return ServiceBooking.objects.filter(tenant_id=self.request.tenant.id)
+            
         return ServiceBooking.objects.filter(
             tenant_id=self.request.tenant.id,
             customer_email=user.email
