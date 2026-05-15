@@ -7,22 +7,22 @@ from rest_framework import permissions
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
-# ✅ IMPORTED ServiceCategory
 from .models import Service, ServiceBooking, ServiceProvider, ServiceCategory
 from .serializers import (
     ServiceSerializer,
     ServiceBookingSerializer,
     CreateServiceBookingSerializer,
     AvailableSlotSerializer,
-    ServiceCategorySerializer # ✅ IMPORTED
+    ServiceCategorySerializer
 )
 from .availability import get_available_slots
 from payments.views import create_service_payment_intent
 
 logger = logging.getLogger(__name__)
 
+
 # ==========================================
-# NEW: Category ViewSet
+# Category ViewSet
 # ==========================================
 class ServiceCategoryViewSet(ModelViewSet):
     """Allows frontend to fetch categories (e.g., for navigation tabs)"""
@@ -33,11 +33,11 @@ class ServiceCategoryViewSet(ModelViewSet):
     def get_queryset(self):
         if not hasattr(self.request, 'tenant') or not self.request.tenant:
             return ServiceCategory.objects.none()
-        # Only return active categories for this specific tenant
         return self.queryset.filter(tenant_id=self.request.tenant.id, is_active=True)
 
+
 # ==========================================
-# UPDATED: Service ViewSet
+# Service ViewSet with category_name filter
 # ==========================================
 class ServiceViewSet(ModelViewSet):
     queryset = Service.objects.all()
@@ -45,21 +45,24 @@ class ServiceViewSet(ModelViewSet):
     permission_classes = [permissions.IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
-        """✅ SECURE: Tenant-filtered queryset with query params filtering"""
+        """Tenant‑filtered queryset with query params for category (ID or name) and add‑ons."""
         if not hasattr(self.request, 'tenant') or not self.request.tenant:
             logger.warning("ServiceViewSet accessed without tenant context")
             return Service.objects.none()
 
-        # Start with tenant's active services
         queryset = self.queryset.filter(tenant_id=self.request.tenant.id, is_active=True)
 
-        # ✅ NEW: Allow frontend to filter by category (?category=1)
+        # Filter by category ID (e.g. ?category=4)
         category_id = self.request.query_params.get('category')
         if category_id:
             queryset = queryset.filter(category_id=category_id)
 
-        # ✅ NEW: Filter out addons unless specifically requested
-        # (Useful so the main menu doesn't show "Clean Inside Fridge" as a standalone service)
+        # NEW: Filter by category name (case‑insensitive, e.g. ?category_name=cleaning_services)
+        category_name = self.request.query_params.get('category_name')
+        if category_name:
+            queryset = queryset.filter(category__name__iexact=category_name)
+
+        # Filter out add‑on services unless explicitly requested
         include_addons = self.request.query_params.get('include_addons')
         if not include_addons or include_addons.lower() == 'false':
             queryset = queryset.filter(is_addon_only=False)
@@ -90,8 +93,10 @@ class ServiceViewSet(ModelViewSet):
         return Response(slots)
 
 
+# ==========================================
+# ServiceBooking ViewSet (unchanged)
+# ==========================================
 class ServiceBookingViewSet(ModelViewSet):
-    # ... KEEP THIS EXACTLY THE SAME AS YOUR CURRENT CODE ...
     serializer_class = ServiceBookingSerializer
     permission_classes = [permissions.IsAuthenticated]
 
@@ -110,7 +115,6 @@ class ServiceBookingViewSet(ModelViewSet):
         )
 
     def create(self, request, *args, **kwargs):
-        # ... KEEP THIS EXACTLY THE SAME AS YOUR CURRENT CODE ...
         create_serializer = CreateServiceBookingSerializer(data=request.data)
         create_serializer.is_valid(raise_exception=True)
         data = create_serializer.validated_data
@@ -157,7 +161,6 @@ class ServiceBookingViewSet(ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def confirm(self, request, pk=None):
-        # ... KEEP EXACTLY THE SAME ...
         booking = self.get_object()
         if booking.status != 'pending':
             return Response({"error": "Booking cannot be confirmed"}, status=400)
@@ -167,7 +170,6 @@ class ServiceBookingViewSet(ModelViewSet):
 
     @action(detail=True, methods=['post'])
     def cancel(self, request, pk=None):
-        # ... KEEP EXACTLY THE SAME ...
         booking = self.get_object()
         if booking.status not in ['pending', 'confirmed']:
             return Response({"error": "Cannot cancel this booking"}, status=400)
