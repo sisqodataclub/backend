@@ -17,6 +17,7 @@ from .serializers import (
 )
 from .availability import get_available_slots
 from payments.views import create_service_payment_intent
+from products.models import Discount   # ✅ Import Discount model for validation
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,101 @@ class ServiceViewSet(ModelViewSet):
             queryset = queryset.filter(is_addon_only=False)
 
         return queryset
+
+    @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
+    def calculate_quote(self, request):
+        """
+        POST /api/services/calculate_quote/
+        Securely calculates the total price using database prices.
+        Request body:
+        {
+            "items": [{"service_id": 1, "quantity": 2}, ...],
+            "furnished_status": "furnished",   # optional
+            "biohazard": "yes-human",           # optional
+            "discount_code": "SAVE10"           # optional
+        }
+        """
+        tenant = request.tenant
+        if not tenant:
+            return Response({"error": "Tenant not identified"}, status=400)
+
+        items = request.data.get('items', [])
+        furnished = request.data.get('furnished_status')
+        biohazard = request.data.get('biohazard')
+        discount_code = request.data.get('discount_code')
+
+        subtotal = 0.0
+        breakdown = []
+
+        # 1. Validate each item and calculate subtotal
+        for item in items:
+            service_id = item.get('service_id')
+            quantity = item.get('quantity', 1)
+            try:
+                service = Service.objects.get(id=service_id, tenant=tenant, is_active=True)
+            except Service.DoesNotExist:
+                return Response({"error": f"Service ID {service_id} not found"}, status=400)
+
+            # Determine unit price
+            if service.price_fixed:
+                unit_price = float(service.price_fixed)
+            elif service.price_per_hour:
+                hours = service.duration_minutes / 60
+                unit_price = float(service.price_per_hour) * hours
+            else:
+                return Response({"error": f"Service '{service.name}' has no price"}, status=400)
+
+            line_total = unit_price * quantity
+            subtotal += line_total
+            breakdown.append({
+                "name": service.name,
+                "quantity": quantity,
+                "unit_price": round(unit_price, 2),
+                "total": round(line_total, 2)
+            })
+
+        # 2. Fees
+        fees = 0.0
+        if furnished == "furnished":
+            fees += 10.0
+            breakdown.append({"name": "Furnished Property Fee", "total": 10.0})
+        if biohazard == "yes-human":
+            fees += 25.0
+            breakdown.append({"name": "Biohazard (Human)", "total": 25.0})
+        elif biohazard == "yes-animal":
+            fees += 15.0
+            breakdown.append({"name": "Biohazard (Animal)", "total": 15.0})
+        elif biohazard == "yes-blood":
+            fees += 40.0
+            breakdown.append({"name": "Biohazard (Blood)", "total": 40.0})
+
+        # 3. Discount validation
+        discount_amount = 0.0
+        if discount_code:
+            try:
+                discount = Discount.objects.get(
+                    code__iexact=discount_code,
+                    tenant=tenant,
+                    is_active=True
+                )
+                # You may add additional checks: expiry, min purchase, remaining uses
+                # Here we use a simple flat discount for example
+                # Modify based on your Discount model method
+                discount_amount = discount.calculate_discount(subtotal + fees)
+                breakdown.append({"name": f"Discount ({discount.code})", "total": -discount_amount})
+            except Discount.DoesNotExist:
+                return Response({"error": "Invalid discount code"}, status=400)
+
+        total = subtotal + fees - discount_amount
+        total = max(0.0, total)
+
+        return Response({
+            "subtotal": round(subtotal, 2),
+            "fees": round(fees, 2),
+            "discount": round(discount_amount, 2),
+            "total": round(total, 2),
+            "breakdown": breakdown
+        })
 
     @action(detail=True, methods=['get'])
     def available_slots(self, request, pk=None):
