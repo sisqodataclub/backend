@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Invoice – Booking #{{ booking.id }}</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 40px;
+            background: #f7f7f7;
+            color: #333;
+        }
+
+        .invoice-container {
+            background: #fff;
+            padding: 40px;
+            border-radius: 8px;
+            max-width: 800px;
+            margin: auto;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 20px;
+            margin-bottom: 30px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 28px;
+            letter-spacing: 1px;
+        }
+
+        .company-info {
+            text-align: right;
+            font-size: 14px;
+            color: #666;
+        }
+
+        /* BADGES */
+        .badge {
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 13px;
+            font-weight: bold;
+            display: inline-block;
+            margin-top: 10px;
+        }
+
+        .badge-paid {
+            background: #d4f8d4;
+            color: #1a7f1a;
+            border: 1px solid #8fd88f;
+        }
+
+        .badge-unpaid {
+            background: #ffe2e2;
+            color: #b30000;
+            border: 1px solid #ff9d9d;
+        }
+
+        .section-title {
+            font-size: 18px;
+            margin-bottom: 10px;
+            font-weight: bold;
+            border-left: 4px solid #0077cc;
+            padding-left: 10px;
+        }
+
+        .info-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 25px;
+        }
+
+        .info-table td {
+            padding: 6px 0;
+            font-size: 14px;
+        }
+
+        .label {
+            font-weight: bold;
+            width: 180px;
+            color: #444;
+        }
+
+        .total-box {
+            background: #f0f8ff;
+            padding: 20px;
+            border-radius: 6px;
+            margin-top: 20px;
+            font-size: 18px;
+            font-weight: bold;
+            border: 1px solid #d0e7ff;
+
+
+        }
+
+
+        .payment-box {
+    max-width: 600px;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+        }
+
+
+
+
+        .footer {
+            margin-top: 40px;
+            text-align: center;
+            font-size: 12px;
+            color: #777;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="invoice-container">
+
+    <!-- HEADER -->
+    <div class="header">
+        <div>
+            <h1>INVOICE</h1>
+
+            {% if booking.payment_method == "paid" %}
+                <span class="badge badge-paid">PAID</span>
+            {% else %}
+                <span class="badge badge-unpaid">UNPAID</span>
+            {% endif %}
+        </div>
+
+        <div class="company-info">
+            <strong>Ddeep Cleaning Services</strong><br>
+            Manchester, United Kingdom<br>
+            clean@ddeepcleaningservices.com<br>
+            +44 7459416262
+        </div>
+    </div>
+
+    <!-- CUSTOMER DETAILS -->
+    <div class="section">
+        <div class="section-title">Customer Details</div>
+        <table class="info-table">
+            <tr><td class="label">Name:</td><td>{{ booking.name }}</td></tr>
+            <tr><td class="label">Email:</td><td>{{ booking.email }}</td></tr>
+            <tr><td class="label">Phone:</td><td>{{ booking.phone }}</td></tr>
+            <tr><td class="label">Payment Method:</td><td>{{ booking.payment_method }}</td></tr>
+        </table>
+    </div>
+
+    <!-- PROPERTY DETAILS -->
+    <div class="section">
+        <div class="section-title">Property Details</div>
+        <table class="info-table">
+            <tr><td class="label">Furnished Status:</td><td>{{ booking.furnished_status }}</td></tr>
+            <tr><td class="label">Parking:</td><td>{{ booking.parking }}</td></tr>
+        </table>
+    </div>
+
+    <!-- CLEANING DETAILS -->
+    <!-- CLEANING DETAILS -->
+    <div class="section">
+        <div class="section-title">Cleaning Details</div>
+
+        <table class="info-table" style="width:100%; border-collapse: collapse; margin-top: 10px;">
+            <thead>
+                <tr style="background:#f0f8ff; border-bottom: 2px solid #d0e7ff;">
+                    <th style="padding: 10px; text-align:left; font-size:14px;">Item</th>
+                    <th style="padding: 10px; text-align:left; font-size:14px;">Quantity / Description</th>
+                </tr>
+            </thead>
+
+            <tbody>
+
+                <!-- Selected Areas -->
+                <tr style="border-bottom: 1px solid #eee;">
+                    <td style="padding: 8px; font-weight:bold;">Selected Service</td>
+                    <td style="padding: 8px;">
+                        {{ booking.selected_areas }}
+                    </td>
+                </tr>
+
+                <!-- Quantities (loop through JSON) -->
+                {% for key, value in booking.quantities.items %}
+                <tr style="border-bottom: 1px solid #eee;">
+                    <td style="padding: 8px; text-transform: capitalize;">
+                        {{ key|cut:"_"|capfirst }}
+                    </td>
+                    <td style="padding: 8px;">
+                        {{ value }}
+                    </td>
+                </tr>
+                {% endfor %}
+
+            </tbody>
+        </table>
+    </div>
+
+
+
+    <!-- TOTAL -->
+    <div class="total-box">
+        Total Amount: £{{ booking.total }}
+    </div>
+
+    <!-- PAYMENT LINK -->
+    <div class="section" style="margin-top: 20px;">
+        <div class="section-title">Payment Link</div>
+    
+        <p class="payment-box">
+            <a href="{{ booking.paymentlink }}" 
+               style="background:#0077cc; color:white; padding:10px 18px; border-radius:6px; 
+                      text-decoration:none; font-weight:bold; display:inline-block;">
+                Click here to pay
+            </a>
+        </p>
+        
+    </div>
+    <!-- BANK TRANSFER OPTION -->
+    <div class="section" style="margin-top: 25px;">
+        <div class="section-title">Bank Transfer Payment</div>
+
+        <div class="payment-box" style="background:#f9f9f9; padding:15px; border-radius:6px; border:1px solid #e0e0e0;">
+            <p style="margin:0; font-size:14px;">
+                <strong>Account Name:</strong> Ddeep Cleaning Services<br>
+                <strong>Sort Code:</strong> 040333<br>
+                <strong>Account Number:</strong> 54316967<br><br>
+                <em>Please use the invoice number or booking reference as the payment reference.</em>
+            </p>
+        </div>
+    </div>
+    
+
+    <!-- FOOTER -->
+    <div class="footer">
+        Invoice generated on {{ booking.created_at }}<br>
+        Thank you for choosing Ddeep Cleaning Services.
+    </div>
+
+</div>
+
+</body>
+</html>

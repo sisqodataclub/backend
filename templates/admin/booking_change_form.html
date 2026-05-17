@@ -1,0 +1,39 @@
+{% extends "admin/change_form.html" %}
+{% load static %}
+
+{% block after_related_objects %}
+
+<h2>Quantities</h2>
+
+<div id="quantities-container" style="margin-bottom: 10px;"></div>
+
+<button type="button" id="add-quantity" class="button">➕ Add Item</button>
+
+<!-- Hidden input from form -->
+{{ adminform.form.quantities_data }}
+
+<!-- Load JS -->
+<script src="{% static 'admin/js/quantities.js' %}"></script>
+
+{% endblock %}
+
+{% block object-tools-items %}
+{{ block.super }}
+
+<li>
+    <a href="../../{{ original.id }}/pdf/" 
+       class="button" 
+       style="background:#0a7; color:white;">
+        Download PDF
+    </a>
+</li>
+
+<li>
+    <a href="../../{{ original.id }}/send-invoice/" 
+       class="button" 
+       style="background:#cc7700; color:white;">
+        Send Invoice
+    </a>
+</li>
+
+{% endblock %}

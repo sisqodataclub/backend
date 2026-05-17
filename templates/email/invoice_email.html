@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Invoice – Booking #{{ booking.id }}</title>
+</head>
+
+<body style="font-family: Arial, sans-serif; background-color:#f5f5f5; margin:0; padding:20px;">
+
+    <table width="100%" cellpadding="0" cellspacing="0" 
+           style="max-width:600px; margin:0 auto; background-color:#ffffff; 
+                  border-radius:8px; overflow:hidden; border:1px solid #e5e5e5;">
+
+        <!-- HEADER -->
+        <tr>
+            <td style="background-color:#1b8a3d; color:#ffffff; padding:20px 24px; 
+                       font-size:20px; font-weight:bold;">
+                Ddeep Cleaning Services – Invoice
+            </td>
+        </tr>
+
+        <!-- BODY CONTENT -->
+        <tr>
+            <td style="padding:24px; font-size:15px; color:#333333; line-height:1.6;">
+
+                <p style="margin:0 0 16px 0;">Dear {{ booking.name }},</p>
+
+                <p style="margin:0 0 16px 0;">
+                    Thank you for choosing <strong>Ddeep Cleaning Services</strong>.
+                    Your invoice for Booking <strong>#{{ booking.id }}</strong> is attached to this email.
+                </p>
+
+                <p style="margin:0 0 16px 0;">
+                    If you have any questions about your booking, payment, or the services provided,
+                    simply reply to this email and our team will be happy to assist you.
+                </p>
+
+                <p style="margin:0 0 4px 0;">Kind regards,</p>
+                <p style="margin:0; font-weight:bold; color:#1b8a3d;">Ddeep Cleaning Services</p>
+
+            </td>
+        </tr>
+
+        <!-- FOOTER -->
+        <tr>
+            <td style="padding:16px 24px; font-size:12px; color:#777777; 
+                       background-color:#fafafa; border-top:1px solid #eeeeee;">
+                This email was sent regarding Booking #{{ booking.id }}.<br>
+                If you received this in error, please disregard it.
+            </td>
+        </tr>
+
+    </table>
+
+</body>
+</html>

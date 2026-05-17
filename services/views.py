@@ -330,6 +330,11 @@ class BookingSnapshotViewSet(ModelViewSet):
         return Response({"status": "saved", "snapshot_id": snapshot.id}, status=200)
 
 
+
+
+
+# services/views.py (CleaningBookingViewSet only – keep other code unchanged)
+
 class CleaningBookingViewSet(ModelViewSet):
     serializer_class = CleaningBookingSerializer
     permission_classes = [permissions.AllowAny]
@@ -347,35 +352,50 @@ class CleaningBookingViewSet(ModelViewSet):
 
         data = request.data
 
-        # --- Secure price calculation (exactly like calculate_quote) ---
+        # Helper to safely convert a value to integer
+        def to_int(value):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+
+        # --- Build items list for price calculation ---
         items = []
-        # Build items from the frontend data (matching old format)
+
+        # 1. Selected areas (area names)
         for area in data.get('selected_areas', []):
             service = Service.objects.filter(name=area, tenant=tenant, is_active=True).first()
             if service:
                 items.append({"service_id": service.id, "quantity": 1})
+
+        # 2. Quantities (keys can be service IDs or names)
         for sid, qty in data.get('quantities', {}).items():
+            qty = to_int(qty)
             if qty > 0:
                 try:
                     service_id = int(sid)
                     if Service.objects.filter(id=service_id, tenant=tenant).exists():
                         items.append({"service_id": service_id, "quantity": qty})
                 except ValueError:
-                    service = Service.objects.filter(name=sid, tenant=tenant).first()
+                    service = Service.objects.filter(name=sid, tenant=tenant, is_active=True).first()
                     if service:
                         items.append({"service_id": service.id, "quantity": qty})
+
+        # 3. Carpets and appliances
         for dict_obj in (data.get('carpets', {}), data.get('appliances', {})):
             for sid, qty in dict_obj.items():
+                qty = to_int(qty)
                 if qty > 0:
                     try:
                         service_id = int(sid)
                         if Service.objects.filter(id=service_id, tenant=tenant).exists():
                             items.append({"service_id": service_id, "quantity": qty})
                     except ValueError:
-                        service = Service.objects.filter(name=sid, tenant=tenant).first()
+                        service = Service.objects.filter(name=sid, tenant=tenant, is_active=True).first()
                         if service:
                             items.append({"service_id": service.id, "quantity": qty})
 
+        # --- Calculate subtotal from items ---
         subtotal = 0.0
         for item in items:
             service_id = item['service_id']
@@ -392,6 +412,7 @@ class CleaningBookingViewSet(ModelViewSet):
                 continue
             subtotal += unit_price * quantity
 
+        # --- Fees ---
         fees = 0.0
         furnished = data.get('furnished_status')
         biohazard = data.get('biohazard')
@@ -404,6 +425,7 @@ class CleaningBookingViewSet(ModelViewSet):
         elif biohazard == 'yes-blood':
             fees += 40.0
 
+        # --- Discount ---
         discount_amount = 0.0
         discount_code = data.get('discount_code')
         if discount_code:
@@ -420,7 +442,7 @@ class CleaningBookingViewSet(ModelViewSet):
         if final_total <= 0:
             return Response({"error": "Invalid total amount"}, status=400)
 
-        # --- Stripe payment link (if payment_method is card) ---
+        # --- Stripe payment link (if card payment) ---
         payment_link = ""
         if data.get('payment_method') == 'card':
             try:
@@ -442,7 +464,7 @@ class CleaningBookingViewSet(ModelViewSet):
             except Exception as e:
                 return Response({"error": f"Stripe error: {str(e)}"}, status=500)
 
-        # --- Save the booking ---
+        # --- Save booking ---
         booking = CleaningBooking.objects.create(
             tenant=tenant,
             session_id=data.get('session_id'),
@@ -461,7 +483,7 @@ class CleaningBookingViewSet(ModelViewSet):
             paymentlink=payment_link,
         )
 
-        # --- Send confirmation email (same as old backend) ---
+        # --- Send confirmation email ---
         try:
             html_message = render_to_string('thankyou.html', {
                 'booking': booking,
