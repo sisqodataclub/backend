@@ -173,3 +173,48 @@ class ServiceBooking(models.Model):
 
     def __str__(self):
         return f"ServiceBooking #{self.id} - {self.service.name} for {self.customer_email}"
+
+
+
+# ==========================================
+# NEW: Cleaning Booking (Old wizard style)
+# ==========================================
+class BookingSnapshot(models.Model):
+    tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
+    session_id = models.CharField(max_length=100, db_index=True)
+    data = models.JSONField(default=dict)
+    is_final = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = [('tenant', 'session_id')]
+
+    def __str__(self):
+        return f"Snapshot {self.session_id}"
+
+
+class CleaningBooking(models.Model):
+    tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
+    session_id = models.CharField(max_length=100, unique=True, db_index=True)
+    customer_name = models.CharField(max_length=200)
+    customer_email = models.EmailField()
+    phone = models.CharField(max_length=20, blank=True)
+    selected_areas = models.JSONField(default=list)
+    quantities = models.JSONField(default=dict)
+    carpets = models.JSONField(default=dict)
+    appliances = models.JSONField(default=dict)
+    furnished_status = models.CharField(max_length=50, blank=True)
+    parking = models.CharField(max_length=50, blank=True)
+    biohazard = models.CharField(max_length=50, blank=True)
+    payment_method = models.CharField(max_length=50)
+    total = models.DecimalField(max_digits=10, decimal_places=2)
+    paymentlink = models.URLField(blank=True)
+    status = models.CharField(max_length=20, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"CleaningBooking {self.session_id}"

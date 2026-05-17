@@ -1,5 +1,10 @@
 from rest_framework import serializers
-from .models import Service, ServiceProvider, ServiceBooking, ServiceCategory
+from .models import (
+    Service, ServiceProvider, ServiceBooking, ServiceCategory,
+    BookingSnapshot, CleaningBooking   # 👈 add these
+)
+
+
 
 # ✅ NEW: Serializer for the Category model
 class ServiceCategorySerializer(serializers.ModelSerializer):
@@ -50,3 +55,19 @@ class AvailableSlotSerializer(serializers.Serializer):
     start = serializers.DateTimeField()
     end = serializers.DateTimeField()
     provider_id = serializers.IntegerField(allow_null=True)
+
+
+
+
+class BookingSnapshotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = BookingSnapshot
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class CleaningBookingSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CleaningBooking
+        fields = '__all__'
+        read_only_fields = ['id', 'created_at', 'status']
