@@ -483,16 +483,35 @@ class CleaningBookingViewSet(ModelViewSet):
             paymentlink=payment_link,
         )
 
-        # --- Send confirmation email ---
+        # --- Send confirmation email with fixed name/email and readable item names ---
         try:
+            # Build a dictionary with service names as keys and quantities as values
+            item_names = {}
+            # Merge all selected items (quantities, carpets, appliances)
+            all_items = {**booking.quantities, **booking.carpets, **booking.appliances}
+            for service_id, qty in all_items.items():
+                if qty > 0:
+                    # Try to get service name
+                    try:
+                        sid = int(service_id)  # ID as integer
+                        service = Service.objects.filter(id=sid, tenant=tenant).first()
+                        if service:
+                            item_names[service.name] = qty
+                        else:
+                            item_names[f"Service {service_id}"] = qty
+                    except (ValueError, TypeError):
+                        # Already a name (like area names)
+                        item_names[service_id] = qty
+
             html_message = render_to_string('thankyou.html', {
-                'booking': booking,
-                'booking_items': {**booking.quantities, **booking.carpets, **booking.appliances},
+                'booking_id': booking.id,
                 'total_quote': final_total,
                 'phone': booking.phone,
                 'parking': booking.parking,
                 'furnished': booking.furnished_status,
-                'booking_id': booking.id,
+                'customer_name': booking.customer_name,      # <-- name for template
+                'customer_email': booking.customer_email,    # <-- email for template
+                'booking_items': item_names,                 # <-- names as keys
             })
             plain_message = strip_tags(html_message)
             send_mail(
