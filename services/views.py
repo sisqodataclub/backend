@@ -335,7 +335,7 @@ class BookingSnapshotViewSet(ModelViewSet):
 
 # services/views.py (CleaningBookingViewSet only – keep other code unchanged)
 
-# services/views.py – CleaningBookingViewSet (complete)
+# services/views.py – CleaningBookingViewSet (complete, with proper name resolution)
 
 class CleaningBookingViewSet(ModelViewSet):
     serializer_class = CleaningBookingSerializer
@@ -493,27 +493,42 @@ class CleaningBookingViewSet(ModelViewSet):
             paymentlink=payment_link,
         )
 
-        # --- Send confirmation email with fixed name/email and readable item names ---
+        # --- Send confirmation email with proper item names (no numeric IDs) ---
         try:
-            item_names = {}
+            # Merge all item quantities
             all_items = {**booking.quantities, **booking.carpets, **booking.appliances}
-            for service_id, qty in all_items.items():
-                # ✅ Convert quantity to integer safely
+            numeric_ids = []
+            for key in all_items.keys():
+                try:
+                    if int(key) > 0:
+                        numeric_ids.append(int(key))
+                except (ValueError, TypeError):
+                    pass
+
+            # Prefetch service names for all numeric IDs
+            services_map = {}
+            if numeric_ids:
+                services = Service.objects.filter(id__in=numeric_ids, tenant=tenant, is_active=True)
+                services_map = {s.id: s.name for s in services}
+
+            item_names = {}
+            for key, qty in all_items.items():
                 try:
                     qty_int = int(qty)
                 except (ValueError, TypeError):
                     continue
                 if qty_int > 0:
+                    # If key is numeric, use mapped name
                     try:
-                        sid = int(service_id)
-                        service = Service.objects.filter(id=sid, tenant=tenant).first()
-                        if service:
-                            item_names[service.name] = qty_int
+                        sid = int(key)
+                        name = services_map.get(sid)
+                        if name:
+                            item_names[name] = qty_int
                         else:
-                            item_names[f"Service {service_id}"] = qty_int
+                            item_names[f"Service {key}"] = qty_int
                     except (ValueError, TypeError):
-                        # service_id is already a name (e.g., area names)
-                        item_names[service_id] = qty_int
+                        # Key is already a name (e.g., area names)
+                        item_names[key] = qty_int
 
             html_message = render_to_string('thankyou.html', {
                 'booking_id': booking.id,
