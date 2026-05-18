@@ -335,8 +335,6 @@ class BookingSnapshotViewSet(ModelViewSet):
 
 # services/views.py (CleaningBookingViewSet only – keep other code unchanged)
 
-# services/views.py – CleaningBookingViewSet (complete, with proper name resolution)
-
 class CleaningBookingViewSet(ModelViewSet):
     serializer_class = CleaningBookingSerializer
     permission_classes = [permissions.AllowAny]
@@ -355,30 +353,29 @@ class CleaningBookingViewSet(ModelViewSet):
         data = request.data
         session_id = data.get('session_id')
 
-        # ✅ Prevent duplicate booking with same session_id
-        if CleaningBooking.objects.filter(session_id=session_id, tenant=tenant).exists():
+        # 1. IDEMPOTENCY GUARD: Prevent duplicate DB entries if double-clicked
+        if session_id and CleaningBooking.objects.filter(session_id=session_id, tenant=tenant).exists():
             return Response(
                 {"error": "This booking has already been submitted. Please refresh the page."},
                 status=409
             )
 
-        # Helper to safely convert a value to integer
         def to_int(value):
             try:
                 return int(value)
             except (TypeError, ValueError):
                 return 0
 
-        # --- Build items list for price calculation ---
+        # 2. BUILD SERVER-SIDE CART FOR SECURE PRICING
         items = []
 
-        # 1. Selected areas (area names)
+        # A. Selected areas
         for area in data.get('selected_areas', []):
             service = Service.objects.filter(name=area, tenant=tenant, is_active=True).first()
             if service:
                 items.append({"service_id": service.id, "quantity": 1})
 
-        # 2. Quantities (keys can be service IDs or names)
+        # B. Quantities
         for sid, qty in data.get('quantities', {}).items():
             qty = to_int(qty)
             if qty > 0:
@@ -391,7 +388,7 @@ class CleaningBookingViewSet(ModelViewSet):
                     if service:
                         items.append({"service_id": service.id, "quantity": qty})
 
-        # 3. Carpets and appliances
+        # C. Carpets and appliances
         for dict_obj in (data.get('carpets', {}), data.get('appliances', {})):
             for sid, qty in dict_obj.items():
                 qty = to_int(qty)
@@ -405,7 +402,7 @@ class CleaningBookingViewSet(ModelViewSet):
                         if service:
                             items.append({"service_id": service.id, "quantity": qty})
 
-        # --- Calculate subtotal from items ---
+        # 3. SECURE PRICE CALCULATION
         subtotal = 0.0
         for item in items:
             service_id = item['service_id']
@@ -414,6 +411,7 @@ class CleaningBookingViewSet(ModelViewSet):
                 service = Service.objects.get(id=service_id, tenant=tenant, is_active=True)
             except Service.DoesNotExist:
                 return Response({"error": f"Service {service_id} not found"}, status=400)
+            
             if service.price_fixed:
                 unit_price = float(service.price_fixed)
             elif service.price_per_hour:
@@ -422,10 +420,11 @@ class CleaningBookingViewSet(ModelViewSet):
                 continue
             subtotal += unit_price * quantity
 
-        # --- Fees ---
+        # 4. ADD FEES
         fees = 0.0
         furnished = data.get('furnished_status')
         biohazard = data.get('biohazard')
+        
         if furnished == 'furnished':
             fees += 10.0
         if biohazard == 'yes-human':
@@ -435,7 +434,7 @@ class CleaningBookingViewSet(ModelViewSet):
         elif biohazard == 'yes-blood':
             fees += 40.0
 
-        # --- Discount ---
+        # 5. APPLY DISCOUNTS
         discount_amount = 0.0
         discount_code = data.get('discount_code')
         if discount_code:
@@ -452,10 +451,11 @@ class CleaningBookingViewSet(ModelViewSet):
         if final_total <= 0:
             return Response({"error": "Invalid total amount"}, status=400)
 
-        # --- Stripe payment link (if card payment) ---
+        # 6. STRIPE INTEGRATION (If Card)
         payment_link = ""
         if data.get('payment_method') == 'card':
             try:
+                import stripe
                 session = stripe.checkout.Session.create(
                     success_url=data.get('success_url', 'https://core.franciscodes.com/success'),
                     cancel_url=data.get('cancel_url', 'https://core.franciscodes.com/cancel'),
@@ -474,7 +474,7 @@ class CleaningBookingViewSet(ModelViewSet):
             except Exception as e:
                 return Response({"error": f"Stripe error: {str(e)}"}, status=500)
 
-        # --- Save booking ---
+        # 7. COMMIT TO DATABASE
         booking = CleaningBooking.objects.create(
             tenant=tenant,
             session_id=session_id,
@@ -493,54 +493,95 @@ class CleaningBookingViewSet(ModelViewSet):
             paymentlink=payment_link,
         )
 
-        # --- Send confirmation email with proper item names (no numeric IDs) ---
+        # 8. GENERATE UNIFIED RECEIPT & DISPATCH EMAIL
         try:
-            # Merge all item quantities
+            # Merge item dictionaries
             all_items = {**booking.quantities, **booking.carpets, **booking.appliances}
+            
+            # Filter out massive numbers (like phone numbers) from being parsed as service IDs
             numeric_ids = []
             for key in all_items.keys():
                 try:
-                    if int(key) > 0:
-                        numeric_ids.append(int(key))
+                    kid = int(key)
+                    if 0 < kid < 1000000:  
+                        numeric_ids.append(kid)
                 except (ValueError, TypeError):
                     pass
 
-            # Prefetch service names for all numeric IDs
+            # Prefetch service names
             services_map = {}
             if numeric_ids:
-                services = Service.objects.filter(id__in=numeric_ids, tenant=tenant, is_active=True)
+                services = Service.objects.filter(id__in=numeric_ids, tenant=tenant)
                 services_map = {s.id: s.name for s in services}
 
+            # Build unified dictionary
             item_names = {}
+            
+            # A. Add main selected areas first
+            for area in booking.selected_areas:
+                item_names[area] = 1
+                
+            # B. Add dynamically quantified items
             for key, qty in all_items.items():
+                # Block leaked frontend personal details
+                if str(key).lower() in ['name', 'email', 'phone', 'parking', 'biohazard', 'payment_method']:
+                    continue
+                    
                 try:
                     qty_int = int(qty)
                 except (ValueError, TypeError):
                     continue
+                    
                 if qty_int > 0:
-                    # If key is numeric, use mapped name
                     try:
                         sid = int(key)
-                        name = services_map.get(sid)
-                        if name:
-                            item_names[name] = qty_int
-                        else:
-                            item_names[f"Service {key}"] = qty_int
+                        if 0 < sid < 1000000:
+                            name = services_map.get(sid)
+                            if name:
+                                item_names[name] = qty_int
+                            else:
+                                item_names[f"Service {key}"] = qty_int
                     except (ValueError, TypeError):
-                        # Key is already a name (e.g., area names)
                         item_names[key] = qty_int
+
+            # C. Inject personal details at the bottom of the table
+            item_names["---"] = "---" 
+            if booking.customer_name: item_names["Name"] = booking.customer_name
+            if booking.customer_email: item_names["Email"] = booking.customer_email
+            if booking.phone: item_names["Phone"] = booking.phone
+            if booking.furnished_status: item_names["Furnished Status"] = booking.furnished_status.title()
+            if booking.parking: item_names["Parking"] = booking.parking.title()
+            if booking.biohazard: item_names["Biohazard"] = booking.biohazard.title()
+            if booking.payment_method: item_names["Payment Method"] = booking.payment_method.title()
+            
+            if data.get('booking_date'): item_names["Booking Date"] = data.get('booking_date')
+            if data.get('timeslot'): item_names["Timeslot"] = data.get('timeslot')
+            if data.get('address'): item_names["Address"] = data.get('address')
+            if data.get('postcode'): item_names["Postcode"] = data.get('postcode')
+            if discount_amount > 0 and discount_code: 
+                item_names["Discount Code"] = discount_code
+
+            # D. Compile Plain Text (Fallback)
+            plain_text_items = "\n".join([f"- {k}: {v}" for k, v in item_names.items() if k != "---"])
+            plain_message = (
+                f"Booking Confirmed! 🎉\n\n"
+                f"Booking ID: {booking.id}\n\n"
+                f"Summary:\n{plain_text_items}\n\n"
+                f"Total Quote: £{final_total}\n\n"
+                f"Thank you for choosing Ddeep Cleaning Services!"
+            )
+            
+            # E. Compile HTML
+            from django.template.loader import render_to_string
+            from django.core.mail import send_mail
+            from django.conf import settings
 
             html_message = render_to_string('thankyou.html', {
                 'booking_id': booking.id,
                 'total_quote': final_total,
-                'phone': booking.phone,
-                'parking': booking.parking,
-                'furnished': booking.furnished_status,
-                'customer_name': booking.customer_name,
-                'customer_email': booking.customer_email,
                 'booking_items': item_names,
             })
-            plain_message = strip_tags(html_message)
+            
             send_mail(
                 subject="Booking Confirmation",
                 message=plain_message,
@@ -552,6 +593,7 @@ class CleaningBookingViewSet(ModelViewSet):
         except Exception as e:
             logger.warning(f"Email send failed: {e}")
 
+        # 9. RETURN SUCCESS TO FRONTEND
         return Response({
             "status": "success",
             "booking_id": booking.id,
