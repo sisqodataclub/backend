@@ -335,6 +335,8 @@ class BookingSnapshotViewSet(ModelViewSet):
 
 # services/views.py (CleaningBookingViewSet only – keep other code unchanged)
 
+# services/views.py – CleaningBookingViewSet (complete)
+
 class CleaningBookingViewSet(ModelViewSet):
     serializer_class = CleaningBookingSerializer
     permission_classes = [permissions.AllowAny]
@@ -351,6 +353,14 @@ class CleaningBookingViewSet(ModelViewSet):
             return Response({"error": "Tenant not identified"}, status=400)
 
         data = request.data
+        session_id = data.get('session_id')
+
+        # ✅ Prevent duplicate booking with same session_id
+        if CleaningBooking.objects.filter(session_id=session_id, tenant=tenant).exists():
+            return Response(
+                {"error": "This booking has already been submitted. Please refresh the page."},
+                status=409
+            )
 
         # Helper to safely convert a value to integer
         def to_int(value):
@@ -467,7 +477,7 @@ class CleaningBookingViewSet(ModelViewSet):
         # --- Save booking ---
         booking = CleaningBooking.objects.create(
             tenant=tenant,
-            session_id=data.get('session_id'),
+            session_id=session_id,
             customer_name=data.get('name', ''),
             customer_email=data.get('email'),
             phone=data.get('phone', ''),
@@ -485,23 +495,25 @@ class CleaningBookingViewSet(ModelViewSet):
 
         # --- Send confirmation email with fixed name/email and readable item names ---
         try:
-            # Build a dictionary with service names as keys and quantities as values
             item_names = {}
-            # Merge all selected items (quantities, carpets, appliances)
             all_items = {**booking.quantities, **booking.carpets, **booking.appliances}
             for service_id, qty in all_items.items():
-                if qty > 0:
-                    # Try to get service name
+                # ✅ Convert quantity to integer safely
+                try:
+                    qty_int = int(qty)
+                except (ValueError, TypeError):
+                    continue
+                if qty_int > 0:
                     try:
-                        sid = int(service_id)  # ID as integer
+                        sid = int(service_id)
                         service = Service.objects.filter(id=sid, tenant=tenant).first()
                         if service:
-                            item_names[service.name] = qty
+                            item_names[service.name] = qty_int
                         else:
-                            item_names[f"Service {service_id}"] = qty
+                            item_names[f"Service {service_id}"] = qty_int
                     except (ValueError, TypeError):
-                        # Already a name (like area names)
-                        item_names[service_id] = qty
+                        # service_id is already a name (e.g., area names)
+                        item_names[service_id] = qty_int
 
             html_message = render_to_string('thankyou.html', {
                 'booking_id': booking.id,
@@ -509,9 +521,9 @@ class CleaningBookingViewSet(ModelViewSet):
                 'phone': booking.phone,
                 'parking': booking.parking,
                 'furnished': booking.furnished_status,
-                'customer_name': booking.customer_name,      # <-- name for template
-                'customer_email': booking.customer_email,    # <-- email for template
-                'booking_items': item_names,                 # <-- names as keys
+                'customer_name': booking.customer_name,
+                'customer_email': booking.customer_email,
+                'booking_items': item_names,
             })
             plain_message = strip_tags(html_message)
             send_mail(
