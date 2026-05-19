@@ -47,7 +47,6 @@
         overflow: hidden;
         font-size: 15px;
     ">
-        <!-- Changed Headers to be more universal -->
         <tr style="background: rgba(56, 189, 248, 0.15);">
             <th style="padding: 12px; text-align:left;">Detail</th>
             <th style="padding: 12px; text-align:left;">Value</th>
@@ -55,118 +54,17 @@
 
         {% for key, value in booking_items.items %}
             {% if key == "---" %}
-                <!-- Visual Divider -->
                 <tr>
                     <td colspan="2" style="border-bottom: 1px solid rgba(56, 189, 248, 0.3); height: 10px;"></td>
                 </tr>
             {% else %}
                 <tr style="border-bottom: 1px solid rgba(255,255,255,0.08);">
-                    <td style="padding: 10px; font-weight: bold; opacity: 0.9;">{{ key }}</td>
-                    <td style="padding: 10px;">{{ value }}</td>
-                </tr>
-            {% endif %}
-        {% endfor %}
-    </table>
-    {% endif %}
-
-    <p style="
-        font-size: 20px;
-        margin: 20px 0;
-        background: rgba(56,189,248,0.15);
-        padding: 12px 18px;
-        border-radius: 8px;
-        display: inline-block;
-        border: 1px solid rgba(56,189,248,0.4);
-    ">
-        <strong>Total Quote:</strong> £{{ total_quote }}
-    </p>
-
-    <div style="text-align:center; margin-top: 35px;">
-        <a href="https://core.franciscodes.com" style="
-            display:inline-block;
-            padding: 12px 25px;
-            background:#38bdf8;
-            color:#0f172a;
-            border-radius: 8px;
-            font-weight: bold;
-            text-decoration:none;
-            transition: 0.2s ease;
-        ">
-            Return to Home
-        </a>
-    </div>
-</div>
-
-<style>
-@media only screen and (max-width: 600px) {
-    .thank-you-container { padding: 20px !important; }
-    table th, table td { padding: 8px !important; font-size: 14px !important; }
-    h1 { font-size: 24px !important; }
-}
-</style><div style="
-    max-width: 700px;
-    margin: 40px auto;
-    background: #0f172a;
-    padding: 40px 30px;
-    border-radius: 14px;
-    color: white;
-    font-family: 'Helvetica', 'Arial', sans-serif;
-    box-shadow: 0 0 25px rgba(56, 189, 248, 0.25);
-    border: 1px solid rgba(56, 189, 248, 0.3);
-">
-
-    <!-- Company Logo -->
-    <div style="text-align:center; margin-bottom: 25px;">
-        <img src="https://www.dataclubcenter.com/static/images/logo.png"
-             alt="Ddeep Cleaning Services"
-             style="max-width: 160px; width: 60%; height:auto;">
-    </div>
-
-    <h1 style="
-        text-align: center;
-        font-size: 28px;
-        margin-bottom: 10px;
-        color: #38bdf8;
-        letter-spacing: 0.5px;
-    ">
-        Booking Confirmed! 🎉
-    </h1>
-
-    <p style="text-align:center; font-size:16px; opacity:0.9; margin-bottom: 30px;">
-        Here is the complete summary of your booking request:
-    </p>
-
-    {% if booking_id %}
-        <p style="font-size: 16px; margin-bottom: 15px;">
-            <strong>Booking ID:</strong> {{ booking_id }}
-        </p>
-    {% endif %}
-
-    {% if booking_items %}
-    <table style="
-        width:100%;
-        margin-bottom:25px;
-        border-collapse: collapse;
-        background: rgba(255,255,255,0.05);
-        border-radius: 8px;
-        overflow: hidden;
-        font-size: 15px;
-    ">
-        <!-- Changed Headers to be more universal -->
-        <tr style="background: rgba(56, 189, 248, 0.15);">
-            <th style="padding: 12px; text-align:left;">Detail</th>
-            <th style="padding: 12px; text-align:left;">Value</th>
-        </tr>
-
-        {% for key, value in booking_items.items %}
-            {% if key == "---" %}
-                <!-- Visual Divider -->
-                <tr>
-                    <td colspan="2" style="border-bottom: 1px solid rgba(56, 189, 248, 0.3); height: 10px;"></td>
-                </tr>
-            {% else %}
-                <tr style="border-bottom: 1px solid rgba(255,255,255,0.08);">
-                    <td style="padding: 10px; font-weight: bold; opacity: 0.9;">{{ key }}</td>
+                    <td style="padding: 10px; font-weight: bold; opacity: 0.9;">
+                        {% if key == "furnished_fee" %}Furnished Fee
+                        {% elif key == "biohazard_fee" %}Biohazard Fee
+                        {% elif key == "discount" %}Discount
+                        {% else %}{{ key|cut:"_"|title }}{% endif %}
+                    </td>
                     <td style="padding: 10px;">{{ value }}</td>
                 </tr>
             {% endif %}
