@@ -352,81 +352,23 @@ class CleaningBookingViewSet(ModelViewSet):
         data = request.data
         session_id = data.get('session_id')
 
-        # ✅ Prevent duplicate booking
+        # Prevent duplicate booking
         if session_id and CleaningBooking.objects.filter(session_id=session_id, tenant=tenant).exists():
             return Response(
                 {"error": "This booking has already been submitted. Please refresh the page."},
                 status=409
             )
 
-        def to_int(value):
-            try:
-                return int(value)
-            except (TypeError, ValueError):
-                return 0
+        # --- Use the frontend's total as the source of truth ---
+        frontend_total = data.get('total')
+        if frontend_total is None or frontend_total <= 0:
+            return Response({"error": "Invalid total amount"}, status=400)
 
-        # --- Build items list for SECURE price calculation ---
-        items = []
+        # (Optional) You can keep the backend price calculation for auditing,
+        # but we will NOT use it for the final total.
+        # We'll trust the frontend's breakdown which came from the secure /calculate_quote/ endpoint.
 
-        for area in data.get('selected_areas', []):
-            service = Service.objects.filter(name=area, tenant=tenant, is_active=True).first()
-            if service: items.append({"service_id": service.id, "quantity": 1})
-
-        for sid, qty in data.get('quantities', {}).items():
-            qty = to_int(qty)
-            if qty > 0:
-                try:
-                    service_id = int(sid)
-                    if Service.objects.filter(id=service_id, tenant=tenant).exists():
-                        items.append({"service_id": service_id, "quantity": qty})
-                except ValueError:
-                    service = Service.objects.filter(name=sid, tenant=tenant, is_active=True).first()
-                    if service: items.append({"service_id": service.id, "quantity": qty})
-
-        for dict_obj in (data.get('carpets', {}), data.get('appliances', {})):
-            for sid, qty in dict_obj.items():
-                qty = to_int(qty)
-                if qty > 0:
-                    try:
-                        service_id = int(sid)
-                        if Service.objects.filter(id=service_id, tenant=tenant).exists():
-                            items.append({"service_id": service_id, "quantity": qty})
-                    except ValueError:
-                        service = Service.objects.filter(name=sid, tenant=tenant, is_active=True).first()
-                        if service: items.append({"service_id": service.id, "quantity": qty})
-
-        # --- Calculate subtotal ---
-        subtotal = 0.0
-        for item in items:
-            try:
-                service = Service.objects.get(id=item['service_id'], tenant=tenant, is_active=True)
-                if service.price_fixed: subtotal += float(service.price_fixed) * item['quantity']
-                elif service.price_per_hour: subtotal += float(service.price_per_hour) * (service.duration_minutes / 60) * item['quantity']
-            except Service.DoesNotExist:
-                pass
-
-        # --- Fees & Discounts ---
-        fees = 0.0
-        furnished = data.get('furnished_status')
-        biohazard = data.get('biohazard')
-        if furnished == 'furnished': fees += 10.0
-        if biohazard == 'yes-human': fees += 25.0
-        elif biohazard == 'yes-animal': fees += 15.0
-        elif biohazard == 'yes-blood': fees += 40.0
-
-        discount_amount = 0.0
-        discount_code = data.get('discount_code')
-        if discount_code:
-            try:
-                from products.models import Discount
-                discount = Discount.objects.get(code__iexact=discount_code, tenant=tenant, is_active=True)
-                discount_amount = discount.calculate_discount(subtotal + fees)
-            except Exception: pass
-
-        final_total = max(0.0, subtotal + fees - discount_amount)
-        if final_total <= 0: return Response({"error": "Invalid total amount"}, status=400)
-
-        # --- Stripe payment link ---
+        # --- Stripe payment link (if card) ---
         payment_link = ""
         if data.get('payment_method') == 'card':
             try:
@@ -435,67 +377,112 @@ class CleaningBookingViewSet(ModelViewSet):
                     success_url=data.get('success_url', 'https://core.franciscodes.com/success'),
                     cancel_url=data.get('cancel_url', 'https://core.franciscodes.com/cancel'),
                     payment_method_types=["card"],
-                    line_items=[{"price_data": {"currency": "gbp", "unit_amount": int(final_total * 100), "product_data": {"name": "Cleaning Service"}}, "quantity": 1}],
+                    line_items=[{
+                        "price_data": {
+                            "currency": "gbp",
+                            "unit_amount": int(frontend_total * 100),
+                            "product_data": {"name": "Cleaning Service"},
+                        },
+                        "quantity": 1,
+                    }],
                     mode="payment",
                 )
                 payment_link = session.url
             except Exception as e:
                 return Response({"error": f"Stripe error: {str(e)}"}, status=500)
 
-        # --- Save booking ---
+        # --- Save booking with frontend total ---
         booking = CleaningBooking.objects.create(
-            tenant=tenant, session_id=session_id, customer_name=data.get('name', ''), customer_email=data.get('email'),
-            phone=data.get('phone', ''), selected_areas=data.get('selected_areas', []), quantities=data.get('quantities', {}),
-            carpets=data.get('carpets', {}), appliances=data.get('appliances', {}), furnished_status=furnished or '',
-            parking=data.get('parking', ''), biohazard=biohazard or '', payment_method=data.get('payment_method', 'unknown'),
-            total=final_total, paymentlink=payment_link,
+            tenant=tenant,
+            session_id=session_id,
+            customer_name=data.get('name', ''),
+            customer_email=data.get('email'),
+            phone=data.get('phone', ''),
+            selected_areas=data.get('selected_areas', []),
+            quantities=data.get('quantities', {}),
+            carpets=data.get('carpets', {}),
+            appliances=data.get('appliances', {}),
+            furnished_status=data.get('furnished_status', ''),
+            parking=data.get('parking', ''),
+            biohazard=data.get('biohazard', ''),
+            payment_method=data.get('payment_method', 'unknown'),
+            total=frontend_total,               # ✅ save the correct total
+            paymentlink=payment_link,
         )
 
         # --- Send confirmation email using Frontend Breakdown ---
         try:
             item_names = {}
             items_breakdown = data.get('items_breakdown', [])
-            
-            # ✅ Directly map the pre-calculated breakdown from the frontend!
+
+            # Directly map the pre-calculated breakdown from the frontend
             if items_breakdown:
                 for line in items_breakdown:
                     name = line.get('name')
                     qty = line.get('quantity')
                     if name and qty and qty > 0:
                         item_names[name] = qty
-            
+            else:
+                # Fallback: in case breakdown is missing, build a simple list from quantities
+                # (This should not happen with the current frontend)
+                for key, qty in data.get('quantities', {}).items():
+                    try:
+                        qty_int = int(qty)
+                        if qty_int > 0:
+                            item_names[f"Item {key}"] = qty_int
+                    except (ValueError, TypeError):
+                        pass
+
             # Add personal details below the divider
             item_names["---"] = "---"
-            if booking.customer_name: item_names["Name"] = booking.customer_name
-            if booking.customer_email: item_names["Email"] = booking.customer_email
-            if booking.phone: item_names["Phone"] = booking.phone
-            if booking.furnished_status: item_names["Furnished Status"] = booking.furnished_status.title()
-            if booking.parking: item_names["Parking"] = booking.parking.title()
-            if booking.biohazard: item_names["Biohazard"] = booking.biohazard.title()
-            if booking.payment_method: item_names["Payment Method"] = booking.payment_method.title()
-            if data.get('booking_date'): item_names["Booking Date"] = data.get('booking_date')
-            if data.get('timeslot'): item_names["Timeslot"] = data.get('timeslot')
-            if data.get('address'): item_names["Address"] = data.get('address')
-            if data.get('postcode'): item_names["Postcode"] = data.get('postcode')
+            if booking.customer_name:
+                item_names["Name"] = booking.customer_name
+            if booking.customer_email:
+                item_names["Email"] = booking.customer_email
+            if booking.phone:
+                item_names["Phone"] = booking.phone
+            if booking.furnished_status:
+                item_names["Furnished Status"] = booking.furnished_status.title()
+            if booking.parking:
+                item_names["Parking"] = booking.parking.title()
+            if booking.biohazard:
+                item_names["Biohazard"] = booking.biohazard.title()
+            if booking.payment_method:
+                item_names["Payment Method"] = booking.payment_method.title()
+            if data.get('booking_date'):
+                item_names["Booking Date"] = data.get('booking_date')
+            if data.get('timeslot'):
+                item_names["Timeslot"] = data.get('timeslot')
+            if data.get('address'):
+                item_names["Address"] = data.get('address')
+            if data.get('postcode'):
+                item_names["Postcode"] = data.get('postcode')
+            discount_code = data.get('discount_code')
+            discount_amount = 0  # not used, but we can show the discount code if present
+            if discount_code:
+                item_names["Discount Code"] = discount_code
 
-            # Build perfect plain text email
+            # Build plain text email
             plain_text_items = "\n".join([f"- {k}: {v}" for k, v in item_names.items() if k != "---"])
             plain_message = (
-                f"Booking Confirmed! 🎉\n\nBooking ID: {booking.id}\n\n"
-                f"Summary:\n{plain_text_items}\n\nTotal Quote: £{final_total}\n\n"
+                f"Booking Confirmed! 🎉\n\n"
+                f"Booking ID: {booking.id}\n\n"
+                f"Summary:\n{plain_text_items}\n\n"
+                f"Total Quote: £{frontend_total}\n\n"
                 f"Thank you for choosing Ddeep Cleaning Services!"
             )
-            
+
+            # HTML email
             from django.template.loader import render_to_string
             from django.core.mail import send_mail
             from django.conf import settings
 
             html_message = render_to_string('thankyou.html', {
                 'booking_id': booking.id,
-                'total_quote': final_total,
+                'total_quote': frontend_total,
                 'booking_items': item_names,
             })
-            
+
             send_mail(
                 subject="Booking Confirmation",
                 message=plain_message,
@@ -508,4 +495,9 @@ class CleaningBookingViewSet(ModelViewSet):
             import logging
             logging.getLogger(__name__).warning(f"Email send failed: {e}")
 
-        return Response({"status": "success", "booking_id": booking.id, "paymentlink": payment_link, "total": final_total}, status=201)
+        return Response({
+            "status": "success",
+            "booking_id": booking.id,
+            "paymentlink": payment_link,
+            "total": frontend_total,
+        }, status=201)
