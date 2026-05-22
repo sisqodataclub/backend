@@ -194,6 +194,7 @@ class BookingSnapshot(models.Model):
         return f"Snapshot {self.session_id}"
 
 
+
 class CleaningBooking(models.Model):
     tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
     session_id = models.CharField(max_length=100, unique=True, db_index=True)
@@ -212,9 +213,41 @@ class CleaningBooking(models.Model):
     paymentlink = models.URLField(blank=True)
     status = models.CharField(max_length=20, default='pending')
     created_at = models.DateTimeField(auto_now_add=True)
+    
+    # ✅ NEW: Flexible JSON store for address, postcode, and future location info
+    property_details = models.JSONField(default=dict, blank=True)
+
+
+   # ✅ NEW: Flexible JSON store for scheduling
+    selected_datetime = models.JSONField(default=dict, blank=True)
 
     class Meta:
         ordering = ['-created_at']
 
     def __str__(self):
         return f"CleaningBooking {self.session_id}"
+
+
+
+
+class BlockedTime(models.Model):
+    date = models.DateField(db_index=True)
+    timeslot = models.CharField(
+        max_length=50, 
+        blank=True, 
+        help_text="Leave blank to block the entire day. Otherwise, type the exact slot to block (e.g., '09:00 - 12:00')."
+    )
+    reason = models.CharField(max_length=200, blank=True, help_text="e.g., Bank Holiday, Fully Booked, etc.")
+
+    class Meta:
+        ordering = ['date']
+        unique_together = ('date', 'timeslot')
+
+    def __str__(self):
+        if self.timeslot:
+            return f"{self.date} | Blocked: {self.timeslot} ({self.reason})"
+        return f"{self.date} | Blocked: Entire Day ({self.reason})"
+
+
+
+

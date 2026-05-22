@@ -2,7 +2,7 @@
 from django.contrib import admin
 from .models import (
     Service, ServiceProvider, ServiceBooking, ServiceCategory,
-    BookingSnapshot, CleaningBooking  # 👈 new models
+    BookingSnapshot, CleaningBooking, BlockedTime  # 👈 new models
 )
 
 # ==========================================
@@ -115,3 +115,14 @@ class CleaningBookingAdmin(admin.ModelAdmin):
             'classes': ('collapse',)
         }),
     )
+
+
+
+
+# (Your existing CleaningBooking admin code here...)
+
+@admin.register(BlockedTime)
+class BlockedTimeAdmin(admin.ModelAdmin):
+    list_display = ('date', 'timeslot', 'reason')
+    list_filter = ('date',)
+    search_fields = ('reason', 'timeslot')

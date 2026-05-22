@@ -6,6 +6,13 @@ from rest_framework.response import Response
 from rest_framework import permissions
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+
+
+
+
+
 
 
 from .models import (
@@ -14,7 +21,8 @@ from .models import (
        ServiceProvider,
        ServiceCategory,
        BookingSnapshot,    # 👈 Added
-       CleaningBooking     # 👈 Added
+       CleaningBooking,
+       BlockedTime     # 👈 Added
    )
 
 
@@ -334,6 +342,14 @@ class BookingSnapshotViewSet(ModelViewSet):
 
 # services/views.py – CleaningBookingViewSet (complete)
 
+# services/views.py – CleaningBookingViewSet (complete)
+
+from rest_framework.viewsets import ModelViewSet
+from rest_framework import permissions
+from rest_framework.response import Response
+from .models import CleaningBooking
+from .serializers import CleaningBookingSerializer
+
 class CleaningBookingViewSet(ModelViewSet):
     serializer_class = CleaningBookingSerializer
     permission_classes = [permissions.AllowAny]
@@ -364,10 +380,6 @@ class CleaningBookingViewSet(ModelViewSet):
         if frontend_total is None or frontend_total <= 0:
             return Response({"error": "Invalid total amount"}, status=400)
 
-        # (Optional) You can keep the backend price calculation for auditing,
-        # but we will NOT use it for the final total.
-        # We'll trust the frontend's breakdown which came from the secure /calculate_quote/ endpoint.
-
         # --- Stripe payment link (if card) ---
         payment_link = ""
         if data.get('payment_method') == 'card':
@@ -391,7 +403,7 @@ class CleaningBookingViewSet(ModelViewSet):
             except Exception as e:
                 return Response({"error": f"Stripe error: {str(e)}"}, status=500)
 
-        # --- Save booking with frontend total ---
+        # --- Save booking with frontend total, property_details, and selected_datetime JSON ---
         booking = CleaningBooking.objects.create(
             tenant=tenant,
             session_id=session_id,
@@ -406,8 +418,17 @@ class CleaningBookingViewSet(ModelViewSet):
             parking=data.get('parking', ''),
             biohazard=data.get('biohazard', ''),
             payment_method=data.get('payment_method', 'unknown'),
-            total=frontend_total,               # ✅ save the correct total
+            total=frontend_total,
             paymentlink=payment_link,
+            property_details={
+                'address': data.get('address', ''),
+                'postcode': data.get('postcode', ''),
+            },
+            # ✅ NEW: Save the date and time cleanly inside the dedicated JSON field
+            selected_datetime={
+                'booking_date': data.get('booking_date', ''),
+                'timeslot': data.get('timeslot', ''),
+            },
         )
 
         # --- Send confirmation email using Frontend Breakdown ---
@@ -424,7 +445,6 @@ class CleaningBookingViewSet(ModelViewSet):
                         item_names[name] = qty
             else:
                 # Fallback: in case breakdown is missing, build a simple list from quantities
-                # (This should not happen with the current frontend)
                 for key, qty in data.get('quantities', {}).items():
                     try:
                         qty_int = int(qty)
@@ -449,16 +469,22 @@ class CleaningBookingViewSet(ModelViewSet):
                 item_names["Biohazard"] = booking.biohazard.title()
             if booking.payment_method:
                 item_names["Payment Method"] = booking.payment_method.title()
-            if data.get('booking_date'):
-                item_names["Booking Date"] = data.get('booking_date')
-            if data.get('timeslot'):
-                item_names["Timeslot"] = data.get('timeslot')
-            if data.get('address'):
-                item_names["Address"] = data.get('address')
-            if data.get('postcode'):
-                item_names["Postcode"] = data.get('postcode')
+                
+            # ✅ Read booking_date and timeslot securely from the new JSON field
+            booking_date = booking.selected_datetime.get('booking_date')
+            timeslot = booking.selected_datetime.get('timeslot')
+            if booking_date:
+                item_names["Booking Date"] = booking_date
+            if timeslot:
+                item_names["Timeslot"] = timeslot
+                
+            # Read address and postcode from the property_details JSON field
+            if booking.property_details.get('address'):
+                item_names["Address"] = booking.property_details['address']
+            if booking.property_details.get('postcode'):
+                item_names["Postcode"] = booking.property_details['postcode']
+                
             discount_code = data.get('discount_code')
-            discount_amount = 0  # not used, but we can show the discount code if present
             if discount_code:
                 item_names["Discount Code"] = discount_code
 
@@ -501,3 +527,49 @@ class CleaningBookingViewSet(ModelViewSet):
             "paymentlink": payment_link,
             "total": frontend_total,
         }, status=201)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_blocked_times(request):
+    today = timezone.now().date()
+    
+    # Only fetch blocked dates from today onwards to keep the payload small
+    blocks = BlockedTime.objects.filter(date__gte=today)
+    
+    fully_blocked_dates = []
+    partially_blocked_slots = {}
+
+    for block in blocks:
+        date_str = block.date.isoformat() # Converts to "YYYY-MM-DD"
+        
+        if not block.timeslot:
+            # If timeslot is blank, the whole day is blocked
+            fully_blocked_dates.append(date_str)
+        else:
+            # If there is a specific timeslot, add it to that date's list
+            if date_str not in partially_blocked_slots:
+                partially_blocked_slots[date_str] = []
+            partially_blocked_slots[date_str].append(block.timeslot)
+
+    return Response({
+        "fully_blocked_dates": fully_blocked_dates,
+        "partially_blocked_slots": partially_blocked_slots
+    })
+
+
+
+
