@@ -10,11 +10,6 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 
 
-
-
-
-
-
 from .models import (
        Service,
        ServiceBooking,
@@ -343,12 +338,20 @@ class BookingSnapshotViewSet(ModelViewSet):
 # services/views.py – CleaningBookingViewSet (complete)
 
 # services/views.py – CleaningBookingViewSet (complete)
+# services/views.py – CleaningBookingViewSet (complete, with update support)
 
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import permissions
 from rest_framework.response import Response
 from .models import CleaningBooking
 from .serializers import CleaningBookingSerializer
+import stripe
+from django.conf import settings
+from django.core.mail import send_mail
+from django.template.loader import render_to_string
+import logging
+
+logger = logging.getLogger(__name__)
 
 class CleaningBookingViewSet(ModelViewSet):
     serializer_class = CleaningBookingSerializer
@@ -375,16 +378,15 @@ class CleaningBookingViewSet(ModelViewSet):
                 status=409
             )
 
-        # --- Use the frontend's total as the source of truth ---
+        # Use the frontend's total as the source of truth
         frontend_total = data.get('total')
         if frontend_total is None or frontend_total <= 0:
             return Response({"error": "Invalid total amount"}, status=400)
 
-        # --- Stripe payment link (if card) ---
+        # Stripe payment link (if card)
         payment_link = ""
         if data.get('payment_method') == 'card':
             try:
-                import stripe
                 session = stripe.checkout.Session.create(
                     success_url=data.get('success_url', 'https://core.franciscodes.com/success'),
                     cancel_url=data.get('cancel_url', 'https://core.franciscodes.com/cancel'),
@@ -403,7 +405,7 @@ class CleaningBookingViewSet(ModelViewSet):
             except Exception as e:
                 return Response({"error": f"Stripe error: {str(e)}"}, status=500)
 
-        # --- Save booking with frontend total, property_details, and selected_datetime JSON ---
+        # Save booking
         booking = CleaningBooking.objects.create(
             tenant=tenant,
             session_id=session_id,
@@ -424,19 +426,16 @@ class CleaningBookingViewSet(ModelViewSet):
                 'address': data.get('address', ''),
                 'postcode': data.get('postcode', ''),
             },
-            # ✅ NEW: Save the date and time cleanly inside the dedicated JSON field
             selected_datetime={
                 'booking_date': data.get('booking_date', ''),
                 'timeslot': data.get('timeslot', ''),
             },
         )
 
-        # --- Send confirmation email using Frontend Breakdown ---
+        # Send confirmation email using frontend breakdown
         try:
             item_names = {}
             items_breakdown = data.get('items_breakdown', [])
-
-            # Directly map the pre-calculated breakdown from the frontend
             if items_breakdown:
                 for line in items_breakdown:
                     name = line.get('name')
@@ -444,7 +443,6 @@ class CleaningBookingViewSet(ModelViewSet):
                     if name and qty and qty > 0:
                         item_names[name] = qty
             else:
-                # Fallback: in case breakdown is missing, build a simple list from quantities
                 for key, qty in data.get('quantities', {}).items():
                     try:
                         qty_int = int(qty)
@@ -453,7 +451,6 @@ class CleaningBookingViewSet(ModelViewSet):
                     except (ValueError, TypeError):
                         pass
 
-            # Add personal details below the divider
             item_names["---"] = "---"
             if booking.customer_name:
                 item_names["Name"] = booking.customer_name
@@ -469,26 +466,21 @@ class CleaningBookingViewSet(ModelViewSet):
                 item_names["Biohazard"] = booking.biohazard.title()
             if booking.payment_method:
                 item_names["Payment Method"] = booking.payment_method.title()
-                
-            # ✅ Read booking_date and timeslot securely from the new JSON field
+
             booking_date = booking.selected_datetime.get('booking_date')
             timeslot = booking.selected_datetime.get('timeslot')
             if booking_date:
                 item_names["Booking Date"] = booking_date
             if timeslot:
                 item_names["Timeslot"] = timeslot
-                
-            # Read address and postcode from the property_details JSON field
             if booking.property_details.get('address'):
                 item_names["Address"] = booking.property_details['address']
             if booking.property_details.get('postcode'):
                 item_names["Postcode"] = booking.property_details['postcode']
-                
             discount_code = data.get('discount_code')
             if discount_code:
                 item_names["Discount Code"] = discount_code
 
-            # Build plain text email
             plain_text_items = "\n".join([f"- {k}: {v}" for k, v in item_names.items() if k != "---"])
             plain_message = (
                 f"Booking Confirmed! 🎉\n\n"
@@ -498,12 +490,7 @@ class CleaningBookingViewSet(ModelViewSet):
                 f"Thank you for choosing Ddeep Cleaning Services!"
             )
 
-            # HTML email
-            from django.template.loader import render_to_string
-            from django.core.mail import send_mail
-            from django.conf import settings
-
-            html_message = render_to_string('thankyou.html', {
+            html_message = render_to_string('quote_booking.html', {
                 'booking_id': booking.id,
                 'total_quote': frontend_total,
                 'booking_items': item_names,
@@ -518,8 +505,7 @@ class CleaningBookingViewSet(ModelViewSet):
                 fail_silently=False,
             )
         except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Email send failed: {e}")
+            logger.warning(f"Email send failed: {e}")
 
         return Response({
             "status": "success",
@@ -528,7 +514,55 @@ class CleaningBookingViewSet(ModelViewSet):
             "total": frontend_total,
         }, status=201)
 
+    def update(self, request, *args, **kwargs):
+        """
+        Handle PATCH requests to update a quote (date, time, payment method, status).
+        This is used by the QuoteCheckout page to finalise the booking.
+        """
+        partial = kwargs.pop('partial', True)
+        instance = self.get_object()
+        data = request.data
 
+        # Update simple fields if provided
+        if 'payment_method' in data:
+            instance.payment_method = data['payment_method']
+        if 'selected_datetime' in data:
+            instance.selected_datetime = data['selected_datetime']
+        if 'status' in data:
+            instance.status = data['status']
+
+        # If payment method is 'card', generate a Stripe payment link
+        payment_link = instance.paymentlink
+        if instance.payment_method == 'card' and instance.total > 0:
+            try:
+                session = stripe.checkout.Session.create(
+                    success_url=data.get('success_url', 'https://core.franciscodes.com/success'),
+                    cancel_url=data.get('cancel_url', 'https://core.franciscodes.com/cancel'),
+                    payment_method_types=["card"],
+                    line_items=[{
+                        "price_data": {
+                            "currency": "gbp",
+                            "unit_amount": int(instance.total * 100),
+                            "product_data": {"name": "Cleaning Service"},
+                        },
+                        "quantity": 1,
+                    }],
+                    mode="payment",
+                )
+                payment_link = session.url
+            except Exception as e:
+                return Response({"error": f"Stripe error: {str(e)}"}, status=500)
+
+        instance.paymentlink = payment_link
+        instance.save(update_fields=['payment_method', 'selected_datetime', 'status', 'paymentlink'])
+
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    def partial_update(self, request, *args, **kwargs):
+        """Allow PATCH requests (partial updates)."""
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
 
 
 
