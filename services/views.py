@@ -340,6 +340,8 @@ class BookingSnapshotViewSet(ModelViewSet):
 # services/views.py – CleaningBookingViewSet (complete)
 # services/views.py – CleaningBookingViewSet (complete, with update support)
 
+# services/views.py – CleaningBookingViewSet (complete, with update support for property_details)
+
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import permissions
 from rest_framework.response import Response
@@ -432,7 +434,7 @@ class CleaningBookingViewSet(ModelViewSet):
             },
         )
 
-        # Send confirmation email using frontend breakdown
+        # Send confirmation email using frontend breakdown (quote summary)
         try:
             item_names = {}
             items_breakdown = data.get('items_breakdown', [])
@@ -483,10 +485,12 @@ class CleaningBookingViewSet(ModelViewSet):
 
             plain_text_items = "\n".join([f"- {k}: {v}" for k, v in item_names.items() if k != "---"])
             plain_message = (
-                f"Booking Confirmed! 🎉\n\n"
-                f"Booking ID: {booking.id}\n\n"
+                f"Your Quote Summary 🎉\n\n"
+                f"Quote ID: {booking.id}\n\n"
                 f"Summary:\n{plain_text_items}\n\n"
                 f"Total Quote: £{frontend_total}\n\n"
+                f"Follow the link below to complete your booking.\n"
+                f"https://api.ddeepcleaningservices.com/booking?quote_id={booking.id}\n\n"
                 f"Thank you for choosing Ddeep Cleaning Services!"
             )
 
@@ -497,7 +501,7 @@ class CleaningBookingViewSet(ModelViewSet):
             })
 
             send_mail(
-                subject="Booking Confirmation",
+                subject="Your Quote Summary – Ddeep Cleaning Services",
                 message=plain_message,
                 from_email=settings.DEFAULT_FROM_EMAIL,
                 recipient_list=[booking.customer_email, 'francis@dataclubcenter.com'],
@@ -516,7 +520,7 @@ class CleaningBookingViewSet(ModelViewSet):
 
     def update(self, request, *args, **kwargs):
         """
-        Handle PATCH requests to update a quote (date, time, payment method, status).
+        Handle PATCH requests to update a quote (date, time, payment method, status, address).
         This is used by the QuoteCheckout page to finalise the booking.
         """
         partial = kwargs.pop('partial', True)
@@ -530,6 +534,12 @@ class CleaningBookingViewSet(ModelViewSet):
             instance.selected_datetime = data['selected_datetime']
         if 'status' in data:
             instance.status = data['status']
+
+        # Update property_details (address/postcode) – merge to preserve any existing keys
+        if 'property_details' in data:
+            current_details = instance.property_details or {}
+            current_details.update(data['property_details'])
+            instance.property_details = current_details
 
         # If payment method is 'card', generate a Stripe payment link
         payment_link = instance.paymentlink
@@ -554,7 +564,9 @@ class CleaningBookingViewSet(ModelViewSet):
                 return Response({"error": f"Stripe error: {str(e)}"}, status=500)
 
         instance.paymentlink = payment_link
-        instance.save(update_fields=['payment_method', 'selected_datetime', 'status', 'paymentlink'])
+        instance.save(update_fields=[
+            'payment_method', 'selected_datetime', 'status', 'paymentlink', 'property_details'
+        ])
 
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
@@ -563,7 +575,6 @@ class CleaningBookingViewSet(ModelViewSet):
         """Allow PATCH requests (partial updates)."""
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
-
 
 
 
