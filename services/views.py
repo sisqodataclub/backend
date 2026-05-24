@@ -340,7 +340,7 @@ class BookingSnapshotViewSet(ModelViewSet):
 # services/views.py – CleaningBookingViewSet (complete)
 # services/views.py – CleaningBookingViewSet (complete, with update support)
 
-# services/views.py – CleaningBookingViewSet (complete, with update support for property_details)
+# services/views.py – CleaningBookingViewSet (complete, with phone update support)
 
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import permissions
@@ -520,8 +520,8 @@ class CleaningBookingViewSet(ModelViewSet):
 
     def update(self, request, *args, **kwargs):
         """
-        Handle PATCH requests to update a quote (date, time, payment method, status, address).
-        This is used by the QuoteCheckout page to finalise the booking.
+        Handle PATCH requests to update a quote (date, time, payment method, status,
+        address, and phone). Used by the QuoteCheckout page to finalise the booking.
         """
         partial = kwargs.pop('partial', True)
         instance = self.get_object()
@@ -534,6 +534,8 @@ class CleaningBookingViewSet(ModelViewSet):
             instance.selected_datetime = data['selected_datetime']
         if 'status' in data:
             instance.status = data['status']
+        if 'phone' in data:
+            instance.phone = data['phone']
 
         # Update property_details (address/postcode) – merge to preserve any existing keys
         if 'property_details' in data:
@@ -565,7 +567,7 @@ class CleaningBookingViewSet(ModelViewSet):
 
         instance.paymentlink = payment_link
         instance.save(update_fields=[
-            'payment_method', 'selected_datetime', 'status', 'paymentlink', 'property_details'
+            'payment_method', 'selected_datetime', 'status', 'paymentlink', 'property_details', 'phone'
         ])
 
         serializer = self.get_serializer(instance)
@@ -575,9 +577,6 @@ class CleaningBookingViewSet(ModelViewSet):
         """Allow PATCH requests (partial updates)."""
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
-
-
-
 
 
 
