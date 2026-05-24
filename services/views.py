@@ -340,17 +340,18 @@ class BookingSnapshotViewSet(ModelViewSet):
 # services/views.py – CleaningBookingViewSet (complete)
 # services/views.py – CleaningBookingViewSet (complete, with update support)
 
-# services/views.py – CleaningBookingViewSet (complete, with phone update support)
+# services/views.py – CleaningBookingViewSet (complete, with final confirmation email)
 
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import permissions
 from rest_framework.response import Response
-from .models import CleaningBooking
+from .models import CleaningBooking, Service
 from .serializers import CleaningBookingSerializer
 import stripe
 from django.conf import settings
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
+from django.utils.html import strip_tags
 import logging
 
 logger = logging.getLogger(__name__)
@@ -434,7 +435,7 @@ class CleaningBookingViewSet(ModelViewSet):
             },
         )
 
-        # Send confirmation email using frontend breakdown (quote summary)
+        # Send quote summary email (quote_booking.html)
         try:
             item_names = {}
             items_breakdown = data.get('items_breakdown', [])
@@ -509,7 +510,7 @@ class CleaningBookingViewSet(ModelViewSet):
                 fail_silently=False,
             )
         except Exception as e:
-            logger.warning(f"Email send failed: {e}")
+            logger.warning(f"Quote summary email failed: {e}")
 
         return Response({
             "status": "success",
@@ -521,11 +522,15 @@ class CleaningBookingViewSet(ModelViewSet):
     def update(self, request, *args, **kwargs):
         """
         Handle PATCH requests to update a quote (date, time, payment method, status,
-        address, and phone). Used by the QuoteCheckout page to finalise the booking.
+        address, phone). Also sends a final booking confirmation email when status becomes 'confirmed'.
         """
         partial = kwargs.pop('partial', True)
         instance = self.get_object()
         data = request.data
+
+        # Track if status changed to 'confirmed'
+        old_status = instance.status
+        status_changed_to_confirmed = False
 
         # Update simple fields if provided
         if 'payment_method' in data:
@@ -534,6 +539,8 @@ class CleaningBookingViewSet(ModelViewSet):
             instance.selected_datetime = data['selected_datetime']
         if 'status' in data:
             instance.status = data['status']
+            if data['status'] == 'confirmed' and old_status != 'confirmed':
+                status_changed_to_confirmed = True
         if 'phone' in data:
             instance.phone = data['phone']
 
@@ -570,6 +577,82 @@ class CleaningBookingViewSet(ModelViewSet):
             'payment_method', 'selected_datetime', 'status', 'paymentlink', 'property_details', 'phone'
         ])
 
+        # If status was just set to 'confirmed', send a final booking confirmation email
+        if status_changed_to_confirmed:
+            try:
+                tenant = instance.tenant
+                item_names = {}
+                # Add main selected areas (the first one is the main service)
+                for area in instance.selected_areas:
+                    item_names[area] = 1
+                # Add quantities (service IDs)
+                for key, qty in instance.quantities.items():
+                    if qty > 0:
+                        try:
+                            sid = int(key)
+                            service = Service.objects.filter(id=sid, tenant=tenant).first()
+                            if service:
+                                item_names[service.name] = qty
+                            else:
+                                item_names[f"Service {key}"] = qty
+                        except (ValueError, TypeError):
+                            item_names[key] = qty
+                # Add carpets and appliances
+                for dict_obj in (instance.carpets, instance.appliances):
+                    for key, qty in dict_obj.items():
+                        if qty > 0:
+                            try:
+                                sid = int(key)
+                                service = Service.objects.filter(id=sid, tenant=tenant).first()
+                                if service:
+                                    item_names[service.name] = qty
+                                else:
+                                    item_names[f"Service {key}"] = qty
+                            except (ValueError, TypeError):
+                                item_names[key] = qty
+
+                # Personal details
+                item_names["---"] = "---"
+                if instance.customer_name:
+                    item_names["Name"] = instance.customer_name
+                if instance.customer_email:
+                    item_names["Email"] = instance.customer_email
+                if instance.phone:
+                    item_names["Phone"] = instance.phone
+                if instance.furnished_status:
+                    item_names["Furnished Status"] = instance.furnished_status.title()
+                if instance.parking:
+                    item_names["Parking"] = instance.parking.title()
+                if instance.biohazard:
+                    item_names["Biohazard"] = instance.biohazard.title()
+                if instance.payment_method:
+                    item_names["Payment Method"] = instance.payment_method.title()
+                if instance.selected_datetime.get('booking_date'):
+                    item_names["Booking Date"] = instance.selected_datetime['booking_date']
+                if instance.selected_datetime.get('timeslot'):
+                    item_names["Timeslot"] = instance.selected_datetime['timeslot']
+                if instance.property_details.get('address'):
+                    item_names["Address"] = instance.property_details['address']
+                if instance.property_details.get('postcode'):
+                    item_names["Postcode"] = instance.property_details['postcode']
+
+                html_message = render_to_string('thankyou.html', {
+                    'booking_id': instance.id,
+                    'total_quote': instance.total,
+                    'booking_items': item_names,
+                })
+                plain_message = strip_tags(html_message)
+                send_mail(
+                    subject="Booking Confirmed!",
+                    message=plain_message,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[instance.customer_email, 'francis@dataclubcenter.com'],
+                    html_message=html_message,
+                    fail_silently=False,
+                )
+            except Exception as e:
+                logger.warning(f"Booking confirmation email failed: {e}")
+
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
@@ -577,8 +660,6 @@ class CleaningBookingViewSet(ModelViewSet):
         """Allow PATCH requests (partial updates)."""
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
-
-
 
 
 

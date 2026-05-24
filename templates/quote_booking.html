@@ -10,13 +10,6 @@
     border: 1px solid rgba(56, 189, 248, 0.3);
 ">
 
-    <!-- Company Logo -->
-    <div style="text-align:center; margin-bottom: 25px;">
-        <img src="https://www.dataclubcenter.com/static/images/logo.png"
-             alt="Ddeep Cleaning Services"
-             style="max-width: 160px; width: 60%; height:auto;">
-    </div>
-
     <h1 style="
         text-align: center;
         font-size: 28px;
@@ -27,16 +20,27 @@
         Your Quote Summary
     </h1>
 
-    <p style="text-align:center; font-size:16px; opacity:0.9; margin-bottom: 30px; line-height: 1.5;">
+    <p style="text-align:center; font-size:16px; opacity:0.9; margin-bottom: 25px; line-height: 1.5;">
         This is your summary of quote confirmation.<br>
         <strong>Press the link below to reserve your slot and complete your booking.</strong>
     </p>
 
-    {% if booking_id %}
-        <p style="font-size: 16px; margin-bottom: 15px;">
-            <strong>Quote ID:</strong> {{ booking_id }}
-        </p>
-    {% endif %}
+    <div style="text-align:center; margin-bottom: 30px;">
+        <a href="https://api.ddeepcleaningservices.com/booking?quote_id={{ booking_id }}" style="
+            display:inline-block;
+            padding: 14px 30px;
+            background:#38bdf8;
+            color:#0f172a;
+            border-radius: 8px;
+            font-weight: bold;
+            font-size: 16px;
+            text-decoration:none;
+            transition: 0.2s ease;
+            box-shadow: 0 4px 15px rgba(56,189,248,0.4);
+        ">
+            Reserve / Book Now
+        </a>
+    </div>
 
     {% if booking_items %}
     <table style="
