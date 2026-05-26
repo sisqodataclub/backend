@@ -10,13 +10,6 @@
     border: 1px solid rgba(56, 189, 248, 0.3);
 ">
 
-    <!-- Company Logo -->
-    <div style="text-align:center; margin-bottom: 25px;">
-        <img src="https://www.dataclubcenter.com/static/images/logo.png"
-             alt="Ddeep Cleaning Services"
-             style="max-width: 160px; width: 60%; height:auto;">
-    </div>
-
     <h1 style="
         text-align: center;
         font-size: 28px;
@@ -30,12 +23,6 @@
     <p style="text-align:center; font-size:16px; opacity:0.9; margin-bottom: 30px;">
         Here is the complete summary of your booking request:
     </p>
-
-    {% if booking_id %}
-        <p style="font-size: 16px; margin-bottom: 15px;">
-            <strong>Booking ID:</strong> {{ booking_id }}
-        </p>
-    {% endif %}
 
     {% if booking_items %}
     <table style="
@@ -84,18 +71,9 @@
         <strong>Total Quote:</strong> £{{ total_quote }}
     </p>
 
-    <div style="text-align:center; margin-top: 35px;">
-        <a href="https://core.franciscodes.com" style="
-            display:inline-block;
-            padding: 12px 25px;
-            background:#38bdf8;
-            color:#0f172a;
-            border-radius: 8px;
-            font-weight: bold;
-            text-decoration:none;
-            transition: 0.2s ease;
-        ">
-            Return to Home
+    <div style="text-align:center; margin-top: 35px; font-size: 16px;">
+        <a href="https://www.ddeepcleaningservices.com/" style="color: #38bdf8; text-decoration: none; font-weight: bold; opacity: 0.9;">
+            Visit our website: www.ddeepcleaningservices.com
         </a>
     </div>
 </div>

@@ -340,7 +340,7 @@ class BookingSnapshotViewSet(ModelViewSet):
 # services/views.py – CleaningBookingViewSet (complete)
 # services/views.py – CleaningBookingViewSet (complete, with update support)
 
-# services/views.py – CleaningBookingViewSet (complete, with final confirmation email)
+# services/views.py – CleaningBookingViewSet (complete, with final confirmation email and proper service name resolution)
 
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import permissions
@@ -582,36 +582,49 @@ class CleaningBookingViewSet(ModelViewSet):
             try:
                 tenant = instance.tenant
                 item_names = {}
-                # Add main selected areas (the first one is the main service)
+
+                # 1. Add main selected areas (already human‑readable)
                 for area in instance.selected_areas:
                     item_names[area] = 1
-                # Add quantities (service IDs)
-                for key, qty in instance.quantities.items():
-                    if qty > 0:
-                        try:
-                            sid = int(key)
-                            service = Service.objects.filter(id=sid, tenant=tenant).first()
-                            if service:
-                                item_names[service.name] = qty
-                            else:
-                                item_names[f"Service {key}"] = qty
-                        except (ValueError, TypeError):
-                            item_names[key] = qty
-                # Add carpets and appliances
-                for dict_obj in (instance.carpets, instance.appliances):
-                    for key, qty in dict_obj.items():
-                        if qty > 0:
-                            try:
-                                sid = int(key)
-                                service = Service.objects.filter(id=sid, tenant=tenant).first()
-                                if service:
-                                    item_names[service.name] = qty
-                                else:
-                                    item_names[f"Service {key}"] = qty
-                            except (ValueError, TypeError):
-                                item_names[key] = qty
 
-                # Personal details
+                # 2. Merge all quantified items (quantities, carpets, appliances)
+                all_items = {**instance.quantities, **instance.carpets, **instance.appliances}
+
+                # 3. Extract numeric IDs to fetch service names
+                numeric_ids = []
+                for key in all_items.keys():
+                    try:
+                        kid = int(key)
+                        numeric_ids.append(kid)
+                    except (ValueError, TypeError):
+                        pass
+
+                # 4. Fetch service names for those IDs
+                services_map = {}
+                if numeric_ids:
+                    services = Service.objects.filter(id__in=numeric_ids, tenant=tenant, is_active=True)
+                    services_map = {s.id: s.name for s in services}
+
+                # 5. Process each quantified item
+                for key, qty in all_items.items():
+                    try:
+                        qty_int = int(qty)
+                        if qty_int <= 0:
+                            continue
+                    except (ValueError, TypeError):
+                        continue
+                    try:
+                        sid = int(key)
+                        name = services_map.get(sid)
+                        if name:
+                            item_names[name] = qty_int
+                        else:
+                            item_names[f"Service {key}"] = qty_int
+                    except (ValueError, TypeError):
+                        # key is already a name (e.g., area name)
+                        item_names[key] = qty_int
+
+                # 6. Add personal details
                 item_names["---"] = "---"
                 if instance.customer_name:
                     item_names["Name"] = instance.customer_name
@@ -636,6 +649,7 @@ class CleaningBookingViewSet(ModelViewSet):
                 if instance.property_details.get('postcode'):
                     item_names["Postcode"] = instance.property_details['postcode']
 
+                # 7. Send email
                 html_message = render_to_string('thankyou.html', {
                     'booking_id': instance.id,
                     'total_quote': instance.total,
@@ -660,8 +674,6 @@ class CleaningBookingViewSet(ModelViewSet):
         """Allow PATCH requests (partial updates)."""
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
-
-
 
 
 
