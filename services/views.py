@@ -341,8 +341,7 @@ class BookingSnapshotViewSet(ModelViewSet):
 # services/views.py – CleaningBookingViewSet (complete, with update support)
 
 
-
-# services/views.py – CleaningBookingViewSet (final, with clean email)
+# services/views.py – CleaningBookingViewSet (final, with variation names in final email)
 
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import permissions
@@ -521,7 +520,7 @@ class CleaningBookingViewSet(ModelViewSet):
         """
         Handle PATCH requests to update a quote (date, time, payment method, status,
         address, phone). Also sends a final booking confirmation email when status becomes 'confirmed'.
-        This version ensures that only human‑readable service names appear in the email.
+        This version shows variation names (e.g., "Kitchen Small") and skips base areas when variations are present.
         """
         partial = kwargs.pop('partial', True)
         instance = self.get_object()
@@ -578,15 +577,23 @@ class CleaningBookingViewSet(ModelViewSet):
             try:
                 item_names = {}
 
-                # 1. Process selected_areas – keep only string (human‑readable) items
-                for area in (instance.selected_areas or []):
-                    if isinstance(area, str) and not area.isdigit():
-                        item_names[area] = 1
-
-                # 2. Merge all quantified items (quantities, carpets, appliances)
+                # 1. Merge all quantified items (quantities, carpets, appliances)
                 all_items = {**instance.quantities, **instance.carpets, **instance.appliances}
 
-                # 3. Separate numeric IDs from other (string) keys
+                # 2. Determine which base areas have variations selected
+                base_areas_to_skip = set()
+                for key in all_items.keys():
+                    if isinstance(key, str) and '_' in key:
+                        base = key.split('_')[0]
+                        base_areas_to_skip.add(base)
+
+                # 3. Process selected_areas – keep only base areas that are NOT skipped
+                for area in (instance.selected_areas or []):
+                    if isinstance(area, str) and not area.isdigit():
+                        if area not in base_areas_to_skip:
+                            item_names[area] = 1
+
+                # 4. Separate numeric IDs from other (string) keys
                 numeric_ids = []
                 other_items = {}
                 for key, qty in all_items.items():
@@ -596,13 +603,13 @@ class CleaningBookingViewSet(ModelViewSet):
                     except (ValueError, TypeError):
                         other_items[key] = qty
 
-                # 4. Fetch service names for all numeric IDs (no tenant / active filters)
+                # 5. Fetch service names for all numeric IDs (no tenant / active filters)
                 services_map = {}
                 if numeric_ids:
                     services = Service.objects.filter(id__in=numeric_ids)
                     services_map = {s.id: s.name for s in services}
 
-                # 5. Add resolved service names (only if a name is found – no fallback)
+                # 6. Add resolved service names (these include variations like "Kitchen_Small")
                 for sid in numeric_ids:
                     name = services_map.get(sid)
                     if name:
@@ -612,13 +619,11 @@ class CleaningBookingViewSet(ModelViewSet):
                         except (ValueError, TypeError):
                             qty_int = 1
                         if qty_int > 0:
-                            # Aggregate in case the same service appears multiple times
                             item_names[name] = item_names.get(name, 0) + qty_int
                     else:
-                        # Log missing service IDs but do not add "Service X"
                         logger.warning(f"Service ID {sid} not found for booking {instance.id}")
 
-                # 6. Add other (non‑numeric) items directly (e.g., fee keys)
+                # 7. Add other (non‑numeric) items directly (e.g., fee keys)
                 for key, qty in other_items.items():
                     try:
                         qty_int = int(qty)
@@ -627,7 +632,7 @@ class CleaningBookingViewSet(ModelViewSet):
                     if qty_int > 0:
                         item_names[key] = item_names.get(key, 0) + qty_int
 
-                # 7. Add personal details
+                # 8. Add personal details
                 item_names["---"] = "---"
                 if instance.customer_name:
                     item_names["Name"] = instance.customer_name
@@ -652,7 +657,7 @@ class CleaningBookingViewSet(ModelViewSet):
                 if instance.property_details.get('postcode'):
                     item_names["Postcode"] = instance.property_details['postcode']
 
-                # 8. Send email
+                # 9. Send email
                 html_message = render_to_string('thankyou.html', {
                     'booking_id': instance.id,
                     'total_quote': instance.total,
@@ -678,6 +683,9 @@ class CleaningBookingViewSet(ModelViewSet):
         """Allow PATCH requests (partial updates)."""
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
+
+
+
 
 
 
