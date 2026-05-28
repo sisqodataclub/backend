@@ -341,7 +341,7 @@ class BookingSnapshotViewSet(ModelViewSet):
 # services/views.py – CleaningBookingViewSet (complete, with update support)
 
 
-# services/views.py – CleaningBookingViewSet (final, with variation names in final email)
+# services/views.py – CleaningBookingViewSet (final, includes size variations)
 
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import permissions
@@ -375,7 +375,6 @@ class CleaningBookingViewSet(ModelViewSet):
         data = request.data
         session_id = data.get('session_id')
 
-        # Prevent duplicate booking
         if session_id and CleaningBooking.objects.filter(session_id=session_id, tenant=tenant).exists():
             return Response(
                 {"error": "This booking has already been submitted. Please refresh the page."},
@@ -408,7 +407,6 @@ class CleaningBookingViewSet(ModelViewSet):
             except Exception as e:
                 return Response({"error": f"Stripe error: {str(e)}"}, status=500)
 
-        # Save booking
         booking = CleaningBooking.objects.create(
             tenant=tenant,
             session_id=session_id,
@@ -435,7 +433,7 @@ class CleaningBookingViewSet(ModelViewSet):
             },
         )
 
-        # Send quote summary email (quote_booking.html)
+        # Send quote summary email (unchanged)
         try:
             item_names = {}
             items_breakdown = data.get('items_breakdown', [])
@@ -455,31 +453,19 @@ class CleaningBookingViewSet(ModelViewSet):
                         pass
 
             item_names["---"] = "---"
-            if booking.customer_name:
-                item_names["Name"] = booking.customer_name
-            if booking.customer_email:
-                item_names["Email"] = booking.customer_email
-            if booking.phone:
-                item_names["Phone"] = booking.phone
-            if booking.furnished_status:
-                item_names["Furnished Status"] = booking.furnished_status.title()
-            if booking.parking:
-                item_names["Parking"] = booking.parking.title()
-            if booking.biohazard:
-                item_names["Biohazard"] = booking.biohazard.title()
-            if booking.payment_method:
-                item_names["Payment Method"] = booking.payment_method.title()
-
+            if booking.customer_name: item_names["Name"] = booking.customer_name
+            if booking.customer_email: item_names["Email"] = booking.customer_email
+            if booking.phone: item_names["Phone"] = booking.phone
+            if booking.furnished_status: item_names["Furnished Status"] = booking.furnished_status.title()
+            if booking.parking: item_names["Parking"] = booking.parking.title()
+            if booking.biohazard: item_names["Biohazard"] = booking.biohazard.title()
+            if booking.payment_method: item_names["Payment Method"] = booking.payment_method.title()
             booking_date = booking.selected_datetime.get('booking_date')
             timeslot = booking.selected_datetime.get('timeslot')
-            if booking_date:
-                item_names["Booking Date"] = booking_date
-            if timeslot:
-                item_names["Timeslot"] = timeslot
-            if booking.property_details.get('address'):
-                item_names["Address"] = booking.property_details['address']
-            if booking.property_details.get('postcode'):
-                item_names["Postcode"] = booking.property_details['postcode']
+            if booking_date: item_names["Booking Date"] = booking_date
+            if timeslot: item_names["Timeslot"] = timeslot
+            if booking.property_details.get('address'): item_names["Address"] = booking.property_details['address']
+            if booking.property_details.get('postcode'): item_names["Postcode"] = booking.property_details['postcode']
 
             plain_text_items = "\n".join([f"- {k}: {v}" for k, v in item_names.items() if k != "---"])
             plain_message = (
@@ -491,13 +477,11 @@ class CleaningBookingViewSet(ModelViewSet):
                 f"https://api.ddeepcleaningservices.com/booking?quote_id={booking.id}\n\n"
                 f"Thank you for choosing Ddeep Cleaning Services!"
             )
-
             html_message = render_to_string('quote_booking.html', {
                 'booking_id': booking.id,
                 'total_quote': frontend_total,
                 'booking_items': item_names,
             })
-
             send_mail(
                 subject="Your Quote Summary – Ddeep Cleaning Services",
                 message=plain_message,
@@ -517,11 +501,6 @@ class CleaningBookingViewSet(ModelViewSet):
         }, status=201)
 
     def update(self, request, *args, **kwargs):
-        """
-        Handle PATCH requests to update a quote (date, time, payment method, status,
-        address, phone). Also sends a final booking confirmation email when status becomes 'confirmed'.
-        This version shows variation names (e.g., "Kitchen Small") and skips base areas when variations are present.
-        """
         partial = kwargs.pop('partial', True)
         instance = self.get_object()
         data = request.data
@@ -539,13 +518,12 @@ class CleaningBookingViewSet(ModelViewSet):
                 status_changed_to_confirmed = True
         if 'phone' in data:
             instance.phone = data['phone']
-
         if 'property_details' in data:
             current_details = instance.property_details or {}
             current_details.update(data['property_details'])
             instance.property_details = current_details
 
-        # Stripe payment link (if card)
+        # Stripe payment link
         payment_link = instance.paymentlink
         if instance.payment_method == 'card' and instance.total > 0:
             try:
@@ -572,44 +550,53 @@ class CleaningBookingViewSet(ModelViewSet):
             'payment_method', 'selected_datetime', 'status', 'paymentlink', 'property_details', 'phone'
         ])
 
-        # Send final confirmation email if status changed to 'confirmed'
+        # Final confirmation email
         if status_changed_to_confirmed:
             try:
                 item_names = {}
 
-                # 1. Merge all quantified items (quantities, carpets, appliances)
+                # Merge all quantified items (including string keys like "Kitchen_Small")
                 all_items = {**instance.quantities, **instance.carpets, **instance.appliances}
 
-                # 2. Determine which base areas have variations selected
+                # Determine which base areas have variations selected (to skip them later)
                 base_areas_to_skip = set()
                 for key in all_items.keys():
                     if isinstance(key, str) and '_' in key:
                         base = key.split('_')[0]
                         base_areas_to_skip.add(base)
 
-                # 3. Process selected_areas – keep only base areas that are NOT skipped
+                # 1. Add selected_areas (skip numeric and base areas that have variations)
                 for area in (instance.selected_areas or []):
                     if isinstance(area, str) and not area.isdigit():
                         if area not in base_areas_to_skip:
                             item_names[area] = 1
 
-                # 4. Separate numeric IDs from other (string) keys
+                # 2. Process all items from all_items
                 numeric_ids = []
-                other_items = {}
                 for key, qty in all_items.items():
+                    # Try to convert to integer to check if it's a service ID
                     try:
                         int(key)
                         numeric_ids.append(int(key))
                     except (ValueError, TypeError):
-                        other_items[key] = qty
+                        # It's a string key – add directly (e.g., "Kitchen_Small")
+                        try:
+                            qty_int = int(qty)
+                            if qty_int > 0:
+                                item_names[key] = item_names.get(key, 0) + qty_int
+                        except (ValueError, TypeError):
+                            pass
 
-                # 5. Fetch service names for all numeric IDs (no tenant / active filters)
+                # 3. Resolve numeric IDs to service names (no tenant/active filters)
                 services_map = {}
                 if numeric_ids:
                     services = Service.objects.filter(id__in=numeric_ids)
                     services_map = {s.id: s.name for s in services}
+                    missing = set(numeric_ids) - set(services_map.keys())
+                    if missing:
+                        logger.warning(f"Booking {instance.id}: missing service IDs {missing}")
 
-                # 6. Add resolved service names (these include variations like "Kitchen_Small")
+                # 4. Add resolved names
                 for sid in numeric_ids:
                     name = services_map.get(sid)
                     if name:
@@ -621,18 +608,10 @@ class CleaningBookingViewSet(ModelViewSet):
                         if qty_int > 0:
                             item_names[name] = item_names.get(name, 0) + qty_int
                     else:
-                        logger.warning(f"Service ID {sid} not found for booking {instance.id}")
+                        # Optionally add a placeholder (but we'll skip to keep clean)
+                        pass
 
-                # 7. Add other (non‑numeric) items directly (e.g., fee keys)
-                for key, qty in other_items.items():
-                    try:
-                        qty_int = int(qty)
-                    except (ValueError, TypeError):
-                        qty_int = 1
-                    if qty_int > 0:
-                        item_names[key] = item_names.get(key, 0) + qty_int
-
-                # 8. Add personal details
+                # 5. Add personal details
                 item_names["---"] = "---"
                 if instance.customer_name:
                     item_names["Name"] = instance.customer_name
@@ -657,14 +636,13 @@ class CleaningBookingViewSet(ModelViewSet):
                 if instance.property_details.get('postcode'):
                     item_names["Postcode"] = instance.property_details['postcode']
 
-                # 9. Send email
+                # Send email
                 html_message = render_to_string('thankyou.html', {
                     'booking_id': instance.id,
                     'total_quote': instance.total,
                     'booking_items': item_names,
                 })
                 plain_message = strip_tags(html_message)
-
                 send_mail(
                     subject="Booking Confirmed!",
                     message=plain_message,
@@ -680,11 +658,8 @@ class CleaningBookingViewSet(ModelViewSet):
         return Response(serializer.data)
 
     def partial_update(self, request, *args, **kwargs):
-        """Allow PATCH requests (partial updates)."""
         kwargs['partial'] = True
         return self.update(request, *args, **kwargs)
-
-
 
 
 
