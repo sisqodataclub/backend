@@ -341,7 +341,8 @@ class BookingSnapshotViewSet(ModelViewSet):
 # services/views.py – CleaningBookingViewSet (complete, with update support)
 
 
-# services/views.py
+
+# services/views.py – CleaningBookingViewSet (final, with clean email)
 
 from rest_framework.viewsets import ModelViewSet
 from rest_framework import permissions
@@ -382,7 +383,6 @@ class CleaningBookingViewSet(ModelViewSet):
                 status=409
             )
 
-        # Use the frontend's total as the source of truth
         frontend_total = data.get('total')
         if frontend_total is None or frontend_total <= 0:
             return Response({"error": "Invalid total amount"}, status=400)
@@ -440,8 +440,6 @@ class CleaningBookingViewSet(ModelViewSet):
         try:
             item_names = {}
             items_breakdown = data.get('items_breakdown', [])
-            
-            # Reads perfectly from the frontend payload
             if items_breakdown:
                 for line in items_breakdown:
                     name = line.get('name')
@@ -483,9 +481,6 @@ class CleaningBookingViewSet(ModelViewSet):
                 item_names["Address"] = booking.property_details['address']
             if booking.property_details.get('postcode'):
                 item_names["Postcode"] = booking.property_details['postcode']
-            discount_code = data.get('discount_code')
-            if discount_code:
-                item_names["Discount Code"] = discount_code
 
             plain_text_items = "\n".join([f"- {k}: {v}" for k, v in item_names.items() if k != "---"])
             plain_message = (
@@ -524,18 +519,17 @@ class CleaningBookingViewSet(ModelViewSet):
 
     def update(self, request, *args, **kwargs):
         """
-        Handle PATCH requests to update a quote. Also sends a final booking confirmation 
-        email when status becomes 'confirmed'.
+        Handle PATCH requests to update a quote (date, time, payment method, status,
+        address, phone). Also sends a final booking confirmation email when status becomes 'confirmed'.
+        This version ensures that only human‑readable service names appear in the email.
         """
         partial = kwargs.pop('partial', True)
         instance = self.get_object()
         data = request.data
 
-        # Track if status changed to 'confirmed'
         old_status = instance.status
         status_changed_to_confirmed = False
 
-        # Update fields
         if 'payment_method' in data:
             instance.payment_method = data['payment_method']
         if 'selected_datetime' in data:
@@ -547,13 +541,12 @@ class CleaningBookingViewSet(ModelViewSet):
         if 'phone' in data:
             instance.phone = data['phone']
 
-        # Update property_details
         if 'property_details' in data:
             current_details = instance.property_details or {}
             current_details.update(data['property_details'])
             instance.property_details = current_details
 
-        # Stripe payment link
+        # Stripe payment link (if card)
         payment_link = instance.paymentlink
         if instance.payment_method == 'card' and instance.total > 0:
             try:
@@ -585,49 +578,56 @@ class CleaningBookingViewSet(ModelViewSet):
             try:
                 item_names = {}
 
-                # 1. Add main selected areas (already human-readable strings)
-                for area in instance.selected_areas:
-                    item_names[area] = 1
+                # 1. Process selected_areas – keep only string (human‑readable) items
+                for area in (instance.selected_areas or []):
+                    if isinstance(area, str) and not area.isdigit():
+                        item_names[area] = 1
 
                 # 2. Merge all quantified items (quantities, carpets, appliances)
                 all_items = {**instance.quantities, **instance.carpets, **instance.appliances}
 
-                # 3. Extract numeric IDs
+                # 3. Separate numeric IDs from other (string) keys
                 numeric_ids = []
-                for key in all_items.keys():
+                other_items = {}
+                for key, qty in all_items.items():
                     try:
+                        int(key)
                         numeric_ids.append(int(key))
                     except (ValueError, TypeError):
-                        pass
+                        other_items[key] = qty
 
-                # 4. Fetch service names for those IDs
+                # 4. Fetch service names for all numeric IDs (no tenant / active filters)
                 services_map = {}
                 if numeric_ids:
-                    # 🚨 THE FIX: Removed tenant and is_active filters so it ALWAYS finds the service name
                     services = Service.objects.filter(id__in=numeric_ids)
                     services_map = {s.id: s.name for s in services}
 
-                # 5. Process each quantified item
-                for key, qty in all_items.items():
+                # 5. Add resolved service names (only if a name is found – no fallback)
+                for sid in numeric_ids:
+                    name = services_map.get(sid)
+                    if name:
+                        qty = all_items.get(str(sid), 1)
+                        try:
+                            qty_int = int(qty)
+                        except (ValueError, TypeError):
+                            qty_int = 1
+                        if qty_int > 0:
+                            # Aggregate in case the same service appears multiple times
+                            item_names[name] = item_names.get(name, 0) + qty_int
+                    else:
+                        # Log missing service IDs but do not add "Service X"
+                        logger.warning(f"Service ID {sid} not found for booking {instance.id}")
+
+                # 6. Add other (non‑numeric) items directly (e.g., fee keys)
+                for key, qty in other_items.items():
                     try:
                         qty_int = int(qty)
-                        if qty_int <= 0:
-                            continue
                     except (ValueError, TypeError):
-                        continue
-                        
-                    try:
-                        sid = int(key)
-                        name = services_map.get(sid)
-                        if name:
-                            item_names[name] = qty_int
-                        else:
-                            item_names[f"Service {key}"] = qty_int
-                    except (ValueError, TypeError):
-                        # key is already a text name (e.g., "furnished_fee")
-                        item_names[key] = qty_int
+                        qty_int = 1
+                    if qty_int > 0:
+                        item_names[key] = item_names.get(key, 0) + qty_int
 
-                # 6. Add personal details
+                # 7. Add personal details
                 item_names["---"] = "---"
                 if instance.customer_name:
                     item_names["Name"] = instance.customer_name
@@ -643,7 +643,6 @@ class CleaningBookingViewSet(ModelViewSet):
                     item_names["Biohazard"] = instance.biohazard.title()
                 if instance.payment_method:
                     item_names["Payment Method"] = instance.payment_method.title()
-                
                 if instance.selected_datetime.get('booking_date'):
                     item_names["Booking Date"] = instance.selected_datetime['booking_date']
                 if instance.selected_datetime.get('timeslot'):
@@ -653,14 +652,14 @@ class CleaningBookingViewSet(ModelViewSet):
                 if instance.property_details.get('postcode'):
                     item_names["Postcode"] = instance.property_details['postcode']
 
-                # 7. Send email
+                # 8. Send email
                 html_message = render_to_string('thankyou.html', {
                     'booking_id': instance.id,
                     'total_quote': instance.total,
                     'booking_items': item_names,
                 })
                 plain_message = strip_tags(html_message)
-                
+
                 send_mail(
                     subject="Booking Confirmed!",
                     message=plain_message,
