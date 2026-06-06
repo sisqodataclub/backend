@@ -57,6 +57,15 @@ INSTALLED_APPS = [
     'django_filters',
     'corsheaders',
     'django_ratelimit',  # Rate limiting support
+
+    # Third-party apps required by django-sage-invoice
+    'django.contrib.humanize',
+    'django_jsonform',
+    'import_export',
+#    'sage_tools',
+    'sage_invoice',     # The main invoice app
+
+
     
     # Local Apps
     'core',
@@ -533,3 +542,16 @@ UMAMI_API_URL = os.environ.get("UMAMI_API_URL", "https://analytics.ddeepcleaning
 UMAMI_WEBSITE_ID = os.environ.get("UMAMI_WEBSITE_ID")
 UMAMI_USERNAME = os.environ.get("UMAMI_USERNAME")
 UMAMI_PASSWORD = os.environ.get("UMAMI_PASSWORD")
+
+
+
+# django-sage-invoice configuration
+SAGE_MODEL_PREFIX = "invoice"
+SAGE_MODEL_TEMPLATE = "sage_invoice"
+
+# Optional: Customize invoice number format (default is 'INV-{year}{month}{day}-{id}')
+# SAGE_INVOICE_NUMBER_FORMAT = "BOOK-{year}{month}-{seq}"
+
+
+
+
