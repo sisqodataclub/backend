@@ -44,3 +44,6 @@ django-sage-tools>=0.3.5,<0.4.0
 django-sage-invoice==0.1.6
 bandit[toml]>=1.7.9,<2.0.0
 pillow>=10.4.0,<11.0.0
+
+
+weasyprint>=68.0

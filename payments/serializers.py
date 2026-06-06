@@ -90,3 +90,39 @@ class CheckoutResponseSerializer(serializers.Serializer):
     checkout_url = serializers.URLField()
     booking_id = serializers.IntegerField()
     session_id = serializers.CharField()
+
+
+
+
+
+# payments/serializers.py (add these)
+from sage_invoice.models import Customer, Invoice, InvoiceItem
+from services.models import Service  # adjust if your Service model is elsewhere
+
+class ServiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Service
+        fields = ['id', 'name', 'price', 'description']
+
+class CustomerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Customer
+        fields = ['id', 'name', 'email', 'phone', 'address']
+
+class InvoiceItemSerializer(serializers.ModelSerializer):
+    service_id = serializers.IntegerField(write_only=True, required=False)
+    service_name = serializers.CharField(source='description', read_only=True)
+
+    class Meta:
+        model = InvoiceItem
+        fields = ['id', 'description', 'quantity', 'unit_price', 'tax_rate', 'total', 'service_id', 'service_name']
+        read_only_fields = ['total']
+
+class InvoiceSerializer(serializers.ModelSerializer):
+    items = InvoiceItemSerializer(many=True, read_only=True)
+    customer_detail = CustomerSerializer(source='customer', read_only=True)
+
+    class Meta:
+        model = Invoice
+        fields = ['id', 'invoice_number', 'customer', 'customer_detail', 'status',
+                  'issue_date', 'due_date', 'total_amount', 'items', 'created_at']

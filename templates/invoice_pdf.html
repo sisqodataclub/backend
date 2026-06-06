@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Invoice {{ invoice.invoice_number }}</title>
+<style>
+body { font-family: sans-serif; margin: 40px; }
+table { width:100%; border-collapse: collapse; margin-top:20px; }
+th, td { border:1px solid #ddd; padding:8px; text-align:left; }
+th { background:#f2f2f2; }
+.total { margin-top:20px; font-weight:bold; }
+</style>
+</head>
+<body>
+<h1>Invoice #{{ invoice.invoice_number }}</h1>
+<p><strong>Customer:</strong> {{ invoice.customer.name }} ({{ invoice.customer.email }})</p>
+<p><strong>Issue Date:</strong> {{ invoice.issue_date|date:"Y-m-d" }}</p>
+<p><strong>Due Date:</strong> {{ invoice.due_date|date:"Y-m-d" }}</p>
+<p><strong>Status:</strong> {{ invoice.get_status_display }}</p>
+<table>
+    <thead><tr><th>Description</th><th>Qty</th><th>Unit Price</th><th>Tax</th><th>Total</th></tr></thead>
+    <tbody>{% for item in invoice.invoiceitem_set.all %}
+    <tr><td>{{ item.description }}</td><td>{{ item.quantity }}</td><td>{{ item.unit_price }}</td><td>{{ item.tax_rate }}%</td><td>{{ item.total }}</td></tr>{% endfor %}
+    </tbody>
+</table>
+<p class="total">Total Amount: {{ invoice.total_amount }}</p>
+</body>
+</html>

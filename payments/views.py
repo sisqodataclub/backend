@@ -405,3 +405,119 @@ def capture_service_payment(request, booking_id):
         return Response({"error": "Service not yet marked as completed"}, status=400)
     intent = stripe.PaymentIntent.capture(booking.stripe_payment_intent_id)
     return Response({"status": "payment captured", "payment_intent_id": intent.id})
+
+
+
+
+
+
+
+
+
+
+
+
+
+# payments/views.py (add at the bottom)
+from rest_framework import viewsets, permissions, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from django.http import HttpResponse
+from django.template.loader import render_to_string
+from weasyprint import HTML
+from sage_invoice.models import Customer, Invoice, InvoiceItem
+from services.models import Service
+from .serializers import ServiceSerializer, CustomerSerializer, InvoiceSerializer
+
+class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
+    """List all services (for invoice item selection)"""
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = ServiceSerializer
+    queryset = Service.objects.all()
+
+class CustomerViewSet(viewsets.ModelViewSet):
+    """Manage invoice customers"""
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = CustomerSerializer
+    queryset = Customer.objects.all()
+
+class InvoiceViewSet(viewsets.ModelViewSet):
+    """Manage invoices"""
+    permission_classes = [permissions.IsAuthenticated]
+    serializer_class = InvoiceSerializer
+    queryset = Invoice.objects.all()
+
+    @action(detail=False, methods=['post'])
+    def create_with_items(self, request):
+        """
+        POST /api/payments/invoices/create_with_items/
+        Create invoice with line items selected from services.
+        """
+        data = request.data
+        customer_email = data.get('customer_email')
+        customer_name = data.get('customer_name', '')
+        items_data = data.get('items', [])
+
+        # Create or get customer
+        customer, _ = Customer.objects.get_or_create(
+            email=customer_email,
+            defaults={'name': customer_name}
+        )
+
+        invoice = Invoice.objects.create(
+            customer=customer,
+            status='draft',
+            issue_date=data.get('issue_date'),
+            due_date=data.get('due_date')
+        )
+
+        total = 0
+        for item in items_data:
+            service_id = item.get('service_id')
+            if service_id:
+                service = Service.objects.get(id=service_id)
+                unit_price = service.price
+                description = service.name
+            else:
+                unit_price = item.get('unit_price', 0)
+                description = item.get('description', '')
+
+            quantity = item.get('quantity', 1)
+            tax_rate = item.get('tax_rate', 0)
+            line_total = quantity * unit_price * (1 + tax_rate/100)
+            total += line_total
+
+            InvoiceItem.objects.create(
+                invoice=invoice,
+                description=description,
+                quantity=quantity,
+                unit_price=unit_price,
+                tax_rate=tax_rate,
+                total=line_total
+            )
+
+        invoice.total_amount = total
+        invoice.save()
+        serializer = self.get_serializer(invoice)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['get'], url_path='pdf')
+    def download_pdf(self, request, pk=None):
+        """Download invoice as PDF"""
+        invoice = self.get_object()
+        # Use sage_invoice's built-in PDF generator if available
+        try:
+            pdf = invoice.generate_pdf()
+            response = HttpResponse(pdf, content_type='application/pdf')
+        except AttributeError:
+            # Fallback: render HTML template and convert
+            html_string = render_to_string('invoice_pdf.html', {'invoice': invoice})
+            html = HTML(string=html_string)
+            pdf = html.write_pdf()
+            response = HttpResponse(pdf, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="invoice_{invoice.invoice_number}.pdf"'
+        return response
+
+
+
+
