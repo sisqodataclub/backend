@@ -33,3 +33,11 @@ requests==2.31.0  # Often needed for health checks or external APIs
 stripe==7.12.0  # Stripe payment processing                                                                                                                                                          
 
 cryptography>=41.0.0
+
+
+
+django-jsonform>=2.22.0,<3.0.0
+django-sage-tools>=0.3.5,<0.4.0
+django-sage-invoice==0.1.6
+bandit[toml]>=1.7.9,<2.0.0
+pillow>=10.4.0,<11.0.0
