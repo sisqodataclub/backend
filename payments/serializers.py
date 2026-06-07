@@ -1,6 +1,5 @@
 """
-Payment Serializers
-Handles checkout requests, booking responses, and full invoice management
+Payment Serializers - Handles checkout, bookings, and full invoice management
 """
 from rest_framework import serializers
 from .models import Booking, BookingItem
@@ -61,11 +60,7 @@ class CheckoutResponseSerializer(serializers.Serializer):
 
 
 # ============================================================================
-# Invoice Full Serializers (Read & Write)
-# ============================================================================
-
-# ============================================================================
-# Invoice Full Serializers (Read & Write) – using actual Invoice model fields
+# Invoice Serializers (matching django-sage-invoice models)
 # ============================================================================
 
 class CategorySerializer(serializers.Serializer):
@@ -75,59 +70,35 @@ class CategorySerializer(serializers.Serializer):
 
 
 class InvoiceItemWriteSerializer(serializers.Serializer):
+    """For creating/updating invoice line items – matches sage_invoice.Item model"""
     id = serializers.IntegerField(required=False)
     description = serializers.CharField()
     quantity = serializers.IntegerField(min_value=1)
-    measurement_unit = serializers.CharField(required=False, allow_blank=True)
+    measurement = serializers.CharField(required=False, allow_blank=True)  # field name is 'measurement'
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2)
-    tax_rate = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
     discount_rate = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
-    total = serializers.DecimalField(max_digits=10, decimal_places=2, read_only=True)
+    # tax_rate and total are NOT stored on the Item model
 
 
 class InvoiceItemReadSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     description = serializers.CharField()
     quantity = serializers.IntegerField()
-    measurement_unit = serializers.CharField(required=False)
+    measurement = serializers.CharField(required=False)
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2)
-    tax_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
     discount_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
-    total = serializers.DecimalField(max_digits=10, decimal_places=2)
+    total_price = serializers.SerializerMethodField()
 
-
-class InvoiceWriteSerializer(serializers.Serializer):
-    """For full create/update (not used by the React form directly)"""
-    title = serializers.CharField(required=False, allow_blank=True)
-    slug = serializers.CharField(required=False, allow_blank=True)
-    invoice_date = serializers.DateField(required=True)
-    tracking_code = serializers.CharField(required=False, allow_blank=True)
-    due_date = serializers.DateField(required=True)
-    status = serializers.ChoiceField(choices=['draft', 'sent', 'paid', 'overdue', 'cancelled'], default='draft')
-    receipt = serializers.BooleanField(default=False)
-    currency = serializers.CharField(default='USD')
-    notes = serializers.CharField(required=False, allow_blank=True)
-    template_choice = serializers.CharField(required=False, allow_blank=True)
-    category = serializers.IntegerField(required=False, allow_null=True)
-    logo = serializers.ImageField(required=False, allow_null=True)
-    signature = serializers.ImageField(required=False, allow_null=True)
-    stamp = serializers.ImageField(required=False, allow_null=True)
-    items = InvoiceItemWriteSerializer(many=True, required=False)
-    tax_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
-    discount_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
-    concession_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
-    # Customer fields (directly on Invoice)
-    customer_name = serializers.CharField(required=True)
-    contacts = serializers.JSONField(required=False)   # expected: {"email": "...", "phone": "..."}
+    def get_total_price(self, obj):
+        return obj.quantity * obj.unit_price * (1 - (obj.discount_rate or 0) / 100)
 
 
 class InvoiceReadSerializer(serializers.Serializer):
     id = serializers.IntegerField()
-    invoice_number = serializers.CharField()
+    invoice_number = serializers.SerializerMethodField()
     title = serializers.CharField()
     slug = serializers.CharField()
     invoice_date = serializers.DateField()
-    tracking_code = serializers.CharField()
     due_date = serializers.DateField()
     status = serializers.CharField()
     receipt = serializers.BooleanField()
@@ -142,15 +113,16 @@ class InvoiceReadSerializer(serializers.Serializer):
     items = InvoiceItemReadSerializer(many=True)
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
-    # Customer fields
     customer_name = serializers.CharField()
-    contacts = serializers.JSONField()
+    contacts = serializers.JSONField()   # expects {"email": "...", "phone": "..."}
+
+    def get_invoice_number(self, obj):
+        return f"INV-{obj.id:06d}"
 
 
 class InvoiceListSerializer(serializers.Serializer):
-    """Lightweight for list views"""
     id = serializers.IntegerField()
-    invoice_number = serializers.CharField()
+    invoice_number = serializers.SerializerMethodField()
     title = serializers.CharField()
     invoice_date = serializers.DateField()
     due_date = serializers.DateField()
@@ -160,9 +132,12 @@ class InvoiceListSerializer(serializers.Serializer):
     customer_name = serializers.CharField()
     contacts = serializers.JSONField()
 
+    def get_invoice_number(self, obj):
+        return f"INV-{obj.id:06d}"
+
 
 # ============================================================================
-# React Dashboard Serializers (The Mega Form)
+# React Dashboard Serializers (for create_with_items endpoint)
 # ============================================================================
 
 class InvoiceItemPayloadSerializer(serializers.Serializer):
@@ -172,6 +147,7 @@ class InvoiceItemPayloadSerializer(serializers.Serializer):
     unit_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=0)
     tax_rate = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=0)
     discount = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=0)
+    measurement_unit = serializers.CharField(required=False, allow_blank=True)
 
     def validate(self, data):
         if not data.get('service_id') and not data.get('description'):
@@ -180,7 +156,7 @@ class InvoiceItemPayloadSerializer(serializers.Serializer):
 
 
 class InvoiceCreationRequestSerializer(serializers.Serializer):
-    """For the React mega form – matches frontend payload"""
+    """Accepts the full payload from the React frontend"""
     customer_email = serializers.EmailField(required=True)
     customer_name = serializers.CharField(required=False, allow_blank=True)
     customer_phone = serializers.CharField(required=False, allow_blank=True)

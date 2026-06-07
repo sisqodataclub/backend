@@ -379,16 +379,10 @@ from decimal import Decimal
 from django.apps import apps
 
 
-# ----------------------------------------------------------------------
-# Helper to get the Invoice model
-# ----------------------------------------------------------------------
 def get_invoice_model():
     return apps.get_model('sage_invoice', 'Invoice')
 
 
-# ----------------------------------------------------------------------
-# Helper to get the Item model (line items)
-# ----------------------------------------------------------------------
 def get_item_model():
     try:
         return apps.get_model('sage_invoice', 'Item')
@@ -396,36 +390,35 @@ def get_item_model():
         return apps.get_model('sage_invoice', 'InvoiceItem')
 
 
-# ----------------------------------------------------------------------
-# Category ViewSet
-# ----------------------------------------------------------------------
+def get_category_model():
+    try:
+        return apps.get_model('sage_invoice', 'Category')
+    except LookupError:
+        return None
+
+
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get']
 
     def get_queryset(self):
-        try:
-            Category = apps.get_model('sage_invoice', 'Category')
+        Category = get_category_model()
+        if Category:
             return Category.objects.all()
-        except LookupError:
-            return []
+        return []
 
     def get_serializer_class(self):
         from rest_framework import serializers
-        try:
-            Category = apps.get_model('sage_invoice', 'Category')
-            class CategorySerializer(serializers.ModelSerializer):
-                class Meta:
-                    model = Category
-                    fields = ['id', 'name', 'description']
-            return CategorySerializer
-        except LookupError:
+        Category = get_category_model()
+        if not Category:
             return serializers.Serializer
+        class CategorySerializer(serializers.ModelSerializer):
+            class Meta:
+                model = Category
+                fields = ['id', 'name', 'description']
+        return CategorySerializer
 
 
-# ----------------------------------------------------------------------
-# Service ViewSet (unchanged, works)
-# ----------------------------------------------------------------------
 class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get']
@@ -460,9 +453,6 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(data)
 
 
-# ----------------------------------------------------------------------
-# Invoice ViewSet – using direct fields on Invoice (customer_name, contacts)
-# ----------------------------------------------------------------------
 class InvoiceViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -474,7 +464,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         from .serializers import InvoiceReadSerializer
         return InvoiceReadSerializer
 
-    # Disable default create/update because frontend uses create_with_items
+    # Disable default create/update because frontend uses custom endpoint
     def create(self, request, *args, **kwargs):
         return Response({"detail": "Use /create_with_items/ to create invoices"}, status=405)
 
@@ -485,7 +475,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     def create_with_items(self, request):
         """
         POST /api/payments/invoices/create_with_items/
-        Creates invoice from frontend data.
+        Creates invoice with customer and items from frontend payload.
         """
         from services.models import Service
         from .serializers import InvoiceCreationRequestSerializer, InvoiceReadSerializer
@@ -495,17 +485,16 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
         serializer = InvoiceCreationRequestSerializer(data=request.data)
         if not serializer.is_valid():
-            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.errors, status=400)
 
         data = serializer.validated_data
 
-        # Build contacts JSON field (email + optional phone)
+        # Build contacts JSON (stored on Invoice's contacts field)
         contacts = {
             'email': data['customer_email'],
             'phone': data.get('customer_phone', ''),
         }
 
-        # Prepare invoice parameters (using actual field names)
         invoice_params = {
             'invoice_date': data.get('invoice_date'),
             'due_date': data.get('due_date'),
@@ -518,25 +507,11 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             'contacts': contacts,
             'title': data.get('title', ''),
         }
-
-        # Optional category
         if data.get('category'):
             invoice_params['category_id'] = data['category']
 
-        # Create invoice
-        try:
-            invoice = Invoice.objects.create(**invoice_params)
-        except TypeError as e:
-            # Fallback in case some field names don't match
-            invoice = Invoice.objects.create(
-                invoice_date=data.get('invoice_date'),
-                due_date=data.get('due_date'),
-                status=data.get('status', 'draft'),
-                customer_name=data.get('customer_name', ''),
-                contacts=contacts,
-            )
+        invoice = Invoice.objects.create(**invoice_params)
 
-        # Process items
         total = Decimal('0.00')
         for item_data in data['items']:
             service_id = item_data.get('service_id')
@@ -557,11 +532,10 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             quantity = Decimal(str(item_data.get('quantity', 1)))
             tax_rate = Decimal(str(item_data.get('tax_rate', 0)))
             discount = Decimal(str(item_data.get('discount', 0)))
+            measurement_unit = item_data.get('measurement_unit', '')
 
-            base_total = quantity * unit_price
-            discount_amount = base_total * (discount / Decimal('100'))
-            subtotal = base_total - discount_amount
-            line_total = subtotal * (Decimal('1') + (tax_rate / Decimal('100')))
+            # Line total (including per-item tax and discount) – used for invoice total calculation
+            line_total = quantity * unit_price * (1 + tax_rate/100) * (1 - discount/100)
             total += line_total
 
             item_params = {
@@ -569,16 +543,12 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 'description': description,
                 'quantity': int(quantity),
                 'unit_price': unit_price,
-                'tax_rate': tax_rate,
-                'total': line_total,
+                'measurement': measurement_unit,
             }
             if discount != 0:
                 item_params['discount_rate'] = discount
-            try:
-                ItemModel.objects.create(**item_params)
-            except TypeError:
-                item_params.pop('discount_rate', None)
-                ItemModel.objects.create(**item_params)
+
+            ItemModel.objects.create(**item_params)
 
         # Apply global percentages
         tax_pct = Decimal(str(data.get('tax_percentage', 0)))
@@ -590,7 +560,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice.save()
 
         out_serializer = InvoiceReadSerializer(invoice)
-        return Response(out_serializer.data, status=status.HTTP_201_CREATED)
+        return Response(out_serializer.data, status=201)
 
     @action(detail=True, methods=['get'], url_path='pdf')
     def download_pdf(self, request, pk=None):
@@ -606,5 +576,5 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             html = HTML(string=html_string)
             pdf = html.write_pdf()
             response = HttpResponse(pdf, content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="invoice_{invoice.invoice_number}.pdf"'
+        response['Content-Disposition'] = f'attachment; filename="invoice_{invoice.id}.pdf"'
         return response
