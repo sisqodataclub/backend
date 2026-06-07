@@ -8,22 +8,24 @@ from .views import (
     stripe_webhook,
     capture_service_payment,
     ServiceViewSet,
-    CustomerViewSet,
     InvoiceViewSet,
+    CategoryViewSet,   # optional – if your views.py has it
 )
 
 # Router for existing e‑commerce bookings
 booking_router = SimpleRouter()
 booking_router.register(r'bookings', BookingViewSet, basename='booking')
 
-# Router for invoice‑related endpoints (services, customers, invoices)
+# Router for invoice‑related endpoints (services, invoices, categories)
 invoice_router = DefaultRouter()
 invoice_router.register(r'services', ServiceViewSet, basename='service')
-invoice_router.register(r'customers', CustomerViewSet, basename='customer')
 invoice_router.register(r'invoices', InvoiceViewSet, basename='invoice')
+# Only register categories if CategoryViewSet exists
+if 'CategoryViewSet' in dir():
+    invoice_router.register(r'categories', CategoryViewSet, basename='category')
+# CustomerViewSet removed – customer data is stored directly on Invoice
 
 urlpatterns = [
-    # Include both routers
     path('', include(booking_router.urls)),
     path('', include(invoice_router.urls)),
 
