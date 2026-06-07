@@ -1,5 +1,5 @@
 """
-Payment Views - Secure Stripe Integration
+Payment Views - Secure Stripe Integration & Invoice Management
 Backend is the source of truth for all pricing
 """
 import logging
@@ -14,6 +14,8 @@ from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
 
 from .models import Booking, BookingItem
 from .serializers import (
@@ -22,12 +24,17 @@ from .serializers import (
     CheckoutResponseSerializer
 )
 from products.models import Product
+from services.models import ServiceBooking
 
 logger = logging.getLogger(__name__)
 
 # Initialize Stripe
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
+
+# ============================================================================
+# E-COMMERCE & STRIPE CHECKOUT
+# ============================================================================
 
 class BookingViewSet(viewsets.ReadOnlyModelViewSet):
     """
@@ -36,51 +43,42 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
     """
     serializer_class = BookingSerializer
     permission_classes = [permissions.AllowAny]  # TODO: Change to IsAuthenticated when auth is ready
-    
+
     def get_queryset(self):
         """Filter bookings by tenant"""
         tenant = getattr(self.request, 'tenant', None)
         if not tenant:
             return Booking.objects.none()
-        
+
         queryset = Booking.objects.filter(tenant=tenant).prefetch_related('items')
-        
+
         # Filter by customer email if provided
         email = self.request.query_params.get('email')
         if email:
             queryset = queryset.filter(customer_email=email)
-        
+
         return queryset
-    
+
     @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def create_checkout(self, request):
-        """
-        POST /api/payments/bookings/create_checkout/
-        
-        Create a Stripe Checkout Session
-        Frontend sends: product IDs, quantities, customer info
-        Backend: Validates prices, creates booking, generates Stripe session
-        """
         tenant = getattr(request, 'tenant', None)
         if not tenant:
             return Response(
                 {'error': 'Tenant not found'},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
-        # Validate request data
+
         serializer = CreateCheckoutSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        
+
         data = serializer.validated_data
-        
+
         try:
             with transaction.atomic():
-                # Step 1: Validate products and calculate prices (BACKEND IS SOURCE OF TRUTH)
                 items_data = []
                 subtotal = Decimal('0.00')
-                
+
                 for item in data['items']:
                     try:
                         product = Product.objects.get(
@@ -93,19 +91,17 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                             {'error': f"Product {item['product_id']} not found or inactive"},
                             status=status.HTTP_404_NOT_FOUND
                         )
-                    
-                    # Check stock availability
+
                     if product.track_inventory and product.stock < item['quantity']:
                         return Response(
                             {'error': f"Insufficient stock for {product.name}"},
                             status=status.HTTP_400_BAD_REQUEST
                         )
-                    
-                    # Use backend price (NEVER trust frontend)
+
                     unit_price = product.final_price
                     line_total = unit_price * item['quantity']
                     subtotal += line_total
-                    
+
                     items_data.append({
                         'product': product,
                         'quantity': item['quantity'],
@@ -113,12 +109,10 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                         'unit_price': unit_price,
                         'line_total': line_total,
                     })
-                
-                # Step 2: Calculate shipping
+
                 shipping_cost = Decimal('0.00') if subtotal > 250 else Decimal('25.00')
                 total = subtotal + shipping_cost
-                
-                # Step 3: Create Booking with UNPAID status
+
                 booking = Booking.objects.create(
                     tenant=tenant,
                     customer_email=data['customer_email'],
@@ -131,8 +125,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                     gift_message=data.get('gift_message', ''),
                     ip_address=self._get_client_ip(request),
                 )
-                
-                # Step 4: Create BookingItems (snapshot of products)
+
                 for item_data in items_data:
                     product = item_data['product']
                     BookingItem.objects.create(
@@ -147,8 +140,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                         line_total=item_data['line_total'],
                         product_image=product.image_url or '',
                     )
-                
-                # Step 5: Create Stripe Checkout Session
+
                 line_items = []
                 for item_data in items_data:
                     product = item_data['product']
@@ -160,12 +152,11 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                                 'description': product.short_description or product.description[:100],
                                 'images': [product.image_url] if product.image_url else [],
                             },
-                            'unit_amount': int(item_data['unit_price'] * 100),  # Convert to cents
+                            'unit_amount': int(item_data['unit_price'] * 100),
                         },
                         'quantity': item_data['quantity'],
                     })
-                
-                # Add shipping as a line item if applicable
+
                 if shipping_cost > 0:
                     line_items.append({
                         'price_data': {
@@ -177,8 +168,7 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                         },
                         'quantity': 1,
                     })
-                
-                # Create Stripe session
+
                 checkout_session = stripe.checkout.Session.create(
                     payment_method_types=['card'],
                     line_items=line_items,
@@ -191,20 +181,18 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                         'tenant_id': tenant.id,
                     },
                 )
-                
-                # Step 6: Update booking with Stripe session ID
+
                 booking.stripe_checkout_session_id = checkout_session.id
                 booking.save(update_fields=['stripe_checkout_session_id'])
-                
+
                 logger.info(f"Created checkout session for booking {booking.id}: {checkout_session.id}")
-                
-                # Return checkout URL to frontend
+
                 return Response({
                     'checkout_url': checkout_session.url,
                     'booking_id': booking.id,
                     'session_id': checkout_session.id,
                 }, status=status.HTTP_201_CREATED)
-        
+
         except stripe.error.StripeError as e:
             logger.error(f"Stripe error: {str(e)}")
             return Response(
@@ -217,9 +205,8 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
                 {'error': 'An error occurred. Please try again.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-    
+
     def _get_client_ip(self, request):
-        """Get client IP address"""
         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
         if x_forwarded_for:
             ip = x_forwarded_for.split(',')[0]
@@ -232,15 +219,9 @@ class BookingViewSet(viewsets.ReadOnlyModelViewSet):
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def stripe_webhook(request):
-    """
-    POST /api/payments/webhook/
-    
-    Stripe Webhook Handler
-    Receives payment confirmations from Stripe and updates booking status
-    """
     payload = request.body
     sig_header = request.META.get('HTTP_STRIPE_SIGNATURE')
-    
+
     try:
         event = stripe.Webhook.construct_event(
             payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
@@ -251,51 +232,39 @@ def stripe_webhook(request):
     except stripe.error.SignatureVerificationError:
         logger.error("Invalid webhook signature")
         return Response({'error': 'Invalid signature'}, status=400)
-    
-    # Handle the event
+
     if event['type'] == 'checkout.session.completed':
         session = event['data']['object']
         _handle_checkout_session_completed(session)
-    
     elif event['type'] == 'payment_intent.succeeded':
         payment_intent = event['data']['object']
         logger.info(f"Payment succeeded: {payment_intent['id']}")
-    
     elif event['type'] == 'payment_intent.payment_failed':
         payment_intent = event['data']['object']
         _handle_payment_failed(payment_intent)
-    
+
     return Response({'status': 'success'}, status=200)
 
 
 def _handle_checkout_session_completed(session):
-    """
-    Handle successful checkout session
-    Update booking status and send confirmation email
-    """
     try:
         booking_id = session['metadata'].get('booking_id')
         if not booking_id:
             logger.error("No booking_id in session metadata")
             return
-        
+
         booking = Booking.objects.get(id=booking_id)
-        
-        # Update booking status
         booking.status = 'PAID'
         booking.stripe_payment_intent_id = session.get('payment_intent', '')
         booking.mark_as_paid()
-        
+
         logger.info(f"Booking {booking.id} marked as PAID")
-        
-        # Send confirmation email
         _send_confirmation_email(booking)
-        
-        # Update product stock
+
         for item in booking.items.all():
             if item.product and item.product.track_inventory:
                 item.product.increment_sales(item.quantity)
-        
+
     except Booking.DoesNotExist:
         logger.error(f"Booking not found: {booking_id}")
     except Exception as e:
@@ -303,13 +272,11 @@ def _handle_checkout_session_completed(session):
 
 
 def _handle_payment_failed(payment_intent):
-    """Handle failed payment"""
     try:
-        # Find booking by payment intent ID
         booking = Booking.objects.filter(
             stripe_payment_intent_id=payment_intent['id']
         ).first()
-        
+
         if booking:
             booking.mark_as_failed()
             logger.info(f"Booking {booking.id} marked as FAILED")
@@ -318,16 +285,13 @@ def _handle_payment_failed(payment_intent):
 
 
 def _send_confirmation_email(booking):
-    """Send order confirmation email"""
     try:
         subject = f"Order Confirmation - Booking #{booking.id}"
-        
-        # Build email message
         items_text = "\n".join([
             f"- {item.product_name} x{item.quantity} - ${item.line_total}"
             for item in booking.items.all()
         ])
-        
+
         message = f"""
 Dear {booking.customer_name or 'Customer'},
 
@@ -354,7 +318,7 @@ Thank you for shopping with us!
 Best regards,
 The Team
         """
-        
+
         send_mail(
             subject=subject,
             message=message,
@@ -362,28 +326,15 @@ The Team
             recipient_list=[booking.customer_email],
             fail_silently=False,
         )
-        
         logger.info(f"Confirmation email sent to {booking.customer_email}")
-    
+
     except Exception as e:
         logger.error(f"Error sending confirmation email: {str(e)}")
 
 
-
-# ============================================================================
-# SERVICE BOOKING PAYMENT INTEGRATION (manual capture)
-# ============================================================================
-from django.shortcuts import get_object_or_404
-from rest_framework.permissions import IsAuthenticated
-from services.models import ServiceBooking
-
 def create_service_payment_intent(booking: ServiceBooking):
-    """
-    Create a Stripe PaymentIntent for a service booking.
-    Uses manual capture so you can charge only after service is completed.
-    """
     intent = stripe.PaymentIntent.create(
-        amount=int(booking.total_price * 100),  # cents
+        amount=int(booking.total_price * 100), 
         currency='usd',
         capture_method='manual',
         metadata={
@@ -396,10 +347,10 @@ def create_service_payment_intent(booking: ServiceBooking):
     )
     return intent
 
+
 @api_view(['POST'])
-@permission_classes([IsAuthenticated])
+@permission_classes([permissions.IsAuthenticated])
 def capture_service_payment(request, booking_id):
-    """Manually capture payment after service is completed"""
     booking = get_object_or_404(ServiceBooking, id=booking_id, tenant=request.tenant)
     if booking.status != 'completed':
         return Response({"error": "Service not yet marked as completed"}, status=400)
@@ -407,35 +358,34 @@ def capture_service_payment(request, booking_id):
     return Response({"status": "payment captured", "payment_intent_id": intent.id})
 
 
-
-
-
-
-
-
-
-
-
-
-
-# payments/views.py (add at the bottom)
-# payments/views.py – add at the bottom (after existing e‑commerce code)
-
 # ============================================================================
 # INVOICE‑RELATED VIEWSETS (no top‑level imports, lazy loading)
 # ============================================================================
 
-from rest_framework import viewsets, permissions, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from django.http import HttpResponse
-from decimal import Decimal
+class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
+    """List categories (if the package has a Category model)"""
+    permission_classes = [permissions.IsAuthenticated]
+    http_method_names = ['get']
+
+    def get_queryset(self):
+        from sage_invoice.models import Category
+        return Category.objects.all()
+
+    def get_serializer_class(self):
+        from rest_framework import serializers
+        from sage_invoice.models import Category
+
+        class CategorySerializer(serializers.ModelSerializer):
+            class Meta:
+                model = Category
+                fields = ['id', 'name', 'description']
+        return CategorySerializer
 
 
 class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
     """List all services for invoice item selection"""
     permission_classes = [permissions.IsAuthenticated]
-    http_method_names = ['get']          # only GET allowed
+    http_method_names = ['get']
 
     def get_queryset(self):
         from services.models import Service
@@ -453,9 +403,9 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 class CustomerViewSet(viewsets.ModelViewSet):
-    """Manage invoice customers (auto‑created when needed)"""
+    """Manage invoice customers"""
     permission_classes = [permissions.IsAuthenticated]
-    http_method_names = ['get', 'post']   # only GET and POST
+    http_method_names = ['get', 'post', 'put', 'patch', 'delete']
 
     def get_queryset(self):
         from sage_invoice.models import CustomerProfile
@@ -465,15 +415,15 @@ class CustomerViewSet(viewsets.ModelViewSet):
         from rest_framework import serializers
         from sage_invoice.models import CustomerProfile
 
-        class CustomerSerializer(serializers.ModelSerializer):
+        class CustomerProfileSerializer(serializers.ModelSerializer):
             class Meta:
                 model = CustomerProfile
                 fields = ['id', 'name', 'email', 'phone', 'address']
-        return CustomerSerializer
+        return CustomerProfileSerializer
 
 
 class InvoiceViewSet(viewsets.ModelViewSet):
-    """Manage invoices"""
+    """Manage invoices – full CRUD + React Mega Form endpoint"""
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
@@ -481,19 +431,185 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         return Invoice.objects.all()
 
     def get_serializer_class(self):
-        from .serializers import InvoiceSerializer
-        return InvoiceSerializer
+        from .serializers import InvoiceReadSerializer
+        return InvoiceReadSerializer
 
+    # ----------------------------------------------------------------------
+    # Standard Full create (supports all fields)
+    # ----------------------------------------------------------------------
+    def create(self, request, *args, **kwargs):
+        from sage_invoice.models import CustomerProfile, Invoice, Category, Item
+        from .serializers import InvoiceWriteSerializer, InvoiceReadSerializer
+
+        write_serializer = InvoiceWriteSerializer(data=request.data)
+        write_serializer.is_valid(raise_exception=True)
+        data = write_serializer.validated_data
+
+        customer_id = data.get('customer')
+        if not customer_id:
+            return Response({'customer': 'Customer is required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            customer = CustomerProfile.objects.get(id=customer_id)
+        except CustomerProfile.DoesNotExist:
+            return Response({'customer': 'Customer not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        category = None
+        if data.get('category'):
+            try:
+                category = Category.objects.get(id=data['category'])
+            except Category.DoesNotExist:
+                pass
+
+        invoice = Invoice.objects.create(
+            customer=customer,
+            category=category,
+            title=data.get('title', ''),
+            slug=data.get('slug', ''),
+            tracking_code=data.get('tracking_code', ''),
+            issue_date=data.get('issue_date'),
+            due_date=data.get('due_date'),
+            status=data.get('status', 'draft'),
+            is_receipt=data.get('is_receipt', False),
+            currency=data.get('currency', 'USD'),
+            notes=data.get('notes', ''),
+            logo=data.get('logo'),
+            signature=data.get('signature'),
+            stamp=data.get('stamp'),
+            template_choice=data.get('template_choice', ''),
+            total_amount=Decimal('0.00'),
+        )
+
+        total_amount = Decimal('0.00')
+        for item_data in data.get('items', []):
+            quantity = Decimal(item_data.get('quantity', 1))
+            unit_price = Decimal(item_data.get('unit_price', 0))
+            tax_rate = Decimal(item_data.get('tax_rate', 0))
+            discount_rate = Decimal(item_data.get('discount_rate', 0))
+            line_total = quantity * unit_price * (1 + tax_rate / 100) * (1 - discount_rate / 100)
+            total_amount += line_total
+
+            Item.objects.create(
+                invoice=invoice,
+                description=item_data.get('description', ''),
+                quantity=quantity,
+                measurement_unit=item_data.get('measurement_unit', ''),
+                unit_price=unit_price,
+                tax_rate=tax_rate,
+                discount_rate=discount_rate,
+                total=line_total,
+            )
+
+        tax_pct = Decimal(data.get('tax_percentage', 0))
+        discount_pct = Decimal(data.get('discount_percentage', 0))
+        concession_pct = Decimal(data.get('concession_percentage', 0))
+        total_amount = total_amount * (1 + tax_pct / 100) * (1 - discount_pct / 100) * (1 - concession_pct / 100)
+
+        invoice.total_amount = total_amount
+        invoice.save()
+
+        out_serializer = InvoiceReadSerializer(invoice)
+        return Response(out_serializer.data, status=status.HTTP_201_CREATED)
+
+    # ----------------------------------------------------------------------
+    # Standard Full update (supports all fields)
+    # ----------------------------------------------------------------------
+    def update(self, request, *args, **kwargs):
+        from sage_invoice.models import CustomerProfile, Invoice, Category, Item
+        from .serializers import InvoiceWriteSerializer, InvoiceReadSerializer
+
+        invoice = self.get_object()
+        write_serializer = InvoiceWriteSerializer(data=request.data, partial=False)
+        write_serializer.is_valid(raise_exception=True)
+        data = write_serializer.validated_data
+
+        if data.get('customer') and data['customer'] != invoice.customer.id:
+            try:
+                invoice.customer = CustomerProfile.objects.get(id=data['customer'])
+            except CustomerProfile.DoesNotExist:
+                return Response({'customer': 'Customer not found'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if 'category' in data:
+            if data['category']:
+                try:
+                    invoice.category = Category.objects.get(id=data['category'])
+                except Category.DoesNotExist:
+                    invoice.category = None
+            else:
+                invoice.category = None
+
+        simple_fields = ['title', 'slug', 'tracking_code', 'issue_date', 'due_date',
+                         'status', 'is_receipt', 'currency', 'notes', 'logo',
+                         'signature', 'stamp', 'template_choice']
+        for field in simple_fields:
+            if field in data:
+                setattr(invoice, field, data[field])
+
+        try:
+            invoice.items.all().delete()
+        except AttributeError:
+            invoice.invoiceitem_set.all().delete()
+
+        total_amount = Decimal('0.00')
+        for item_data in data.get('items', []):
+            quantity = Decimal(item_data.get('quantity', 1))
+            unit_price = Decimal(item_data.get('unit_price', 0))
+            tax_rate = Decimal(item_data.get('tax_rate', 0))
+            discount_rate = Decimal(item_data.get('discount_rate', 0))
+            line_total = quantity * unit_price * (1 + tax_rate / 100) * (1 - discount_rate / 100)
+            total_amount += line_total
+
+            Item.objects.create(
+                invoice=invoice,
+                description=item_data.get('description', ''),
+                quantity=quantity,
+                measurement_unit=item_data.get('measurement_unit', ''),
+                unit_price=unit_price,
+                tax_rate=tax_rate,
+                discount_rate=discount_rate,
+                total=line_total,
+            )
+
+        tax_pct = Decimal(data.get('tax_percentage', 0))
+        discount_pct = Decimal(data.get('discount_percentage', 0))
+        concession_pct = Decimal(data.get('concession_percentage', 0))
+        total_amount = total_amount * (1 + tax_pct / 100) * (1 - discount_pct / 100) * (1 - concession_pct / 100)
+
+        invoice.total_amount = total_amount
+        invoice.save()
+
+        out_serializer = InvoiceReadSerializer(invoice)
+        return Response(out_serializer.data, status=status.HTTP_200_OK)
+
+    def partial_update(self, request, *args, **kwargs):
+        from .serializers import InvoiceWriteSerializer
+
+        invoice = self.get_object()
+        write_serializer = InvoiceWriteSerializer(data=request.data, partial=True)
+        write_serializer.is_valid(raise_exception=True)
+        data = write_serializer.validated_data
+
+        existing_serializer = InvoiceWriteSerializer(invoice)
+        merged_data = existing_serializer.data
+        for key, value in data.items():
+            merged_data[key] = value
+        
+        request._full_data = merged_data
+        return self.update(request, *args, **kwargs)
+
+    # ----------------------------------------------------------------------
+    # React Dashboard Mega Form Endpoint (create_with_items)
+    # ----------------------------------------------------------------------
     @action(detail=False, methods=['post'])
     def create_with_items(self, request):
         """
         POST /api/payments/invoices/create_with_items/
-        Creates invoice and line items from service selections.
+        Handles the full payload from the React Mega Form.
         """
         from sage_invoice.models import CustomerProfile, Invoice, Item
         from services.models import Service
-        from .serializers import InvoiceCreationRequestSerializer, InvoiceSerializer as InvoiceOutSerializer
+        from .serializers import InvoiceCreationRequestSerializer, InvoiceReadSerializer
 
+        # 1. Validate incoming Mega Form data
         serializer = InvoiceCreationRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -502,52 +618,90 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         customer_email = data['customer_email']
         customer_name = data.get('customer_name', '')
 
+        # 2. Get or Create Customer
         customer, _ = CustomerProfile.objects.get_or_create(
             email=customer_email,
             defaults={'name': customer_name}
         )
 
-        invoice = Invoice.objects.create(
-            customer=customer,
-            status='draft',
-            issue_date=data.get('issue_date'),
-            due_date=data.get('due_date')
-        )
+        # 3. Create Invoice Header
+        invoice_params = {
+            'customer': customer,
+            'status': data.get('status', 'draft'),
+            'issue_date': data.get('issue_date'),
+            'due_date': data.get('due_date'),
+        }
+        
+        # Add the Mega Form optional fields
+        if data.get('title'): invoice_params['title'] = data['title']
+        if data.get('currency'): invoice_params['currency'] = data['currency']
+        if data.get('notes'): invoice_params['notes'] = data['notes']
+        if data.get('template_choice'): invoice_params['template_choice'] = data['template_choice']
 
+        # Failsafe creation
+        try:
+            invoice = Invoice.objects.create(**invoice_params)
+        except TypeError:
+            invoice = Invoice.objects.create(
+                customer=customer, 
+                status=data.get('status', 'draft'),
+                issue_date=data.get('issue_date'),
+                due_date=data.get('due_date')
+            )
+
+        # 4. Create Line Items and Calculate Math
         total = Decimal('0.00')
         for item_data in data['items']:
             service_id = item_data.get('service_id')
             if service_id:
                 service = Service.objects.get(id=service_id)
-                unit_price = service.price
+                unit_price = Decimal(str(service.price))
                 description = service.name
             else:
                 unit_price = Decimal(str(item_data.get('unit_price', 0)))
                 description = item_data.get('description', '')
 
-            quantity = item_data.get('quantity', 1)
+            quantity = Decimal(str(item_data.get('quantity', 1)))
             tax_rate = Decimal(str(item_data.get('tax_rate', 0)))
-            line_total = Decimal(quantity) * unit_price * (1 + tax_rate / 100)
+            discount = Decimal(str(item_data.get('discount', 0)))
+
+            # Math Logic
+            base_total = quantity * unit_price
+            discount_amount = base_total * (discount / Decimal('100'))
+            subtotal = base_total - discount_amount
+            line_total = subtotal * (Decimal('1') + (tax_rate / Decimal('100')))
             total += line_total
 
-            Item.objects.create(
-                invoice=invoice,
-                description=description,
-                quantity=quantity,
-                unit_price=unit_price,
-                tax_rate=tax_rate,
-                total=line_total
-            )
+            item_params = {
+                'invoice': invoice,
+                'description': description,
+                'quantity': int(quantity),
+                'unit_price': unit_price,
+                'tax_rate': tax_rate,
+                'total': line_total
+            }
 
+            if discount != 0:
+                item_params['discount_rate'] = discount
+                
+            try:
+                Item.objects.create(**item_params)
+            except TypeError:
+                item_params.pop('discount_rate', None)
+                Item.objects.create(**item_params)
+
+        # 5. Finalize and Return
         invoice.total_amount = total
         invoice.save()
 
-        out_serializer = InvoiceOutSerializer(invoice)
+        out_serializer = InvoiceReadSerializer(invoice)
         return Response(out_serializer.data, status=status.HTTP_201_CREATED)
 
+    # ----------------------------------------------------------------------
+    # PDF download
+    # ----------------------------------------------------------------------
     @action(detail=True, methods=['get'], url_path='pdf')
     def download_pdf(self, request, pk=None):
-        """Download invoice as PDF"""
         from django.template.loader import render_to_string
         from weasyprint import HTML
 
