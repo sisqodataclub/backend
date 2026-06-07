@@ -397,6 +397,10 @@ def get_category_model():
         return None
 
 
+def get_expense_model():
+    return apps.get_model('sage_invoice', 'Expense')
+
+
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get']
@@ -415,7 +419,7 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
         class CategorySerializer(serializers.ModelSerializer):
             class Meta:
                 model = Category
-                fields = ['id', 'name', 'description']
+                fields = ['id', 'title', 'description']
         return CategorySerializer
 
 
@@ -473,15 +477,12 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def create_with_items(self, request):
-        """
-        POST /api/payments/invoices/create_with_items/
-        Creates invoice with customer and items from frontend payload.
-        """
         from services.models import Service
         from .serializers import InvoiceCreationRequestSerializer, InvoiceReadSerializer
 
         Invoice = get_invoice_model()
         ItemModel = get_item_model()
+        Expense = get_expense_model()
 
         serializer = InvoiceCreationRequestSerializer(data=request.data)
         if not serializer.is_valid():
@@ -489,19 +490,28 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
         data = serializer.validated_data
 
-        # Build contacts JSON (stored on Invoice's contacts field)
+        # Build contacts JSON exactly as sage_invoice expects
         contacts = {
-            'email': data['customer_email'],
-            'phone': data.get('customer_phone', ''),
+            "Contact Info": {
+                "email": data['customer_email'],
+                "phone": data.get('customer_phone', ''),
+            }
         }
 
+        # Format notes to match Sage's strict JSON Array schema
+        notes_json = []
+        raw_notes = data.get('notes', '')
+        if raw_notes:
+            notes_json.append({"label": "Additional Notes", "content": raw_notes})
+
+        # Map frontend fields (issue_date → invoice_date)
         invoice_params = {
-            'invoice_date': data.get('invoice_date'),
+            'invoice_date': data.get('issue_date'),
             'due_date': data.get('due_date'),
             'status': data.get('status', 'draft'),
             'receipt': data.get('receipt', False),
             'currency': data.get('currency', 'USD'),
-            'notes': data.get('notes', ''),
+            'notes': notes_json,
             'template_choice': data.get('template_choice', 'quotation_1'),
             'customer_name': data.get('customer_name', ''),
             'contacts': contacts,
@@ -512,7 +522,8 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
         invoice = Invoice.objects.create(**invoice_params)
 
-        total = Decimal('0.00')
+        # Create items and compute subtotal (including per‑item tax/discount)
+        subtotal = Decimal('0.00')
         for item_data in data['items']:
             service_id = item_data.get('service_id')
             if service_id:
@@ -532,32 +543,42 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             quantity = Decimal(str(item_data.get('quantity', 1)))
             tax_rate = Decimal(str(item_data.get('tax_rate', 0)))
             discount = Decimal(str(item_data.get('discount', 0)))
-            measurement_unit = item_data.get('measurement_unit', '')
+            measurement = item_data.get('measurement', '')
 
-            # Line total (including per-item tax and discount) – used for invoice total calculation
+            # Line total including per‑item tax/discount (affects subtotal, not stored on Item)
             line_total = quantity * unit_price * (1 + tax_rate/100) * (1 - discount/100)
-            total += line_total
+            subtotal += line_total
 
-            item_params = {
-                'invoice': invoice,
-                'description': description,
-                'quantity': int(quantity),
-                'unit_price': unit_price,
-                'measurement': measurement_unit,
-            }
-            if discount != 0:
-                item_params['discount_rate'] = discount
+            # Create the item (per‑item tax/discount not stored on item)
+            ItemModel.objects.create(
+                invoice=invoice,
+                description=description,
+                quantity=int(quantity),
+                unit_price=unit_price,
+                measurement=measurement,
+            )
 
-            ItemModel.objects.create(**item_params)
-
-        # Apply global percentages
+        # Apply global percentages and create Expense record
         tax_pct = Decimal(str(data.get('tax_percentage', 0)))
         discount_pct = Decimal(str(data.get('discount_percentage', 0)))
         concession_pct = Decimal(str(data.get('concession_percentage', 0)))
-        final_total = total * (1 + tax_pct/100) * (1 - discount_pct/100) * (1 - concession_pct/100)
 
-        invoice.total_amount = final_total
-        invoice.save()
+        tax_amount = subtotal * (tax_pct / 100)
+        discount_amount = subtotal * (discount_pct / 100)
+        concession_amount = subtotal * (concession_pct / 100)
+        total_amount = subtotal + tax_amount - discount_amount - concession_amount
+
+        Expense.objects.create(
+            invoice=invoice,
+            subtotal=subtotal,
+            tax_percentage=tax_pct,
+            discount_percentage=discount_pct,
+            concession_percentage=concession_pct,
+            tax_amount=tax_amount,
+            discount_amount=discount_amount,
+            concession_amount=concession_amount,
+            total_amount=total_amount,
+        )
 
         out_serializer = InvoiceReadSerializer(invoice)
         return Response(out_serializer.data, status=201)
