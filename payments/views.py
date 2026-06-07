@@ -366,6 +366,11 @@ def capture_service_payment(request, booking_id):
 # INVOICE‑RELATED VIEWSETS (no top‑level imports, lazy loading)
 # ============================================================================
 
+
+# ============================================================================
+# INVOICE‑RELATED VIEWSETS (no top‑level imports, lazy loading)
+# ============================================================================
+
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -375,33 +380,10 @@ from django.apps import apps
 
 
 # ----------------------------------------------------------------------
-# Helper to get the Invoice model (always works)
+# Helper to get the Invoice model
 # ----------------------------------------------------------------------
 def get_invoice_model():
     return apps.get_model('sage_invoice', 'Invoice')
-
-
-# ----------------------------------------------------------------------
-# Helper to get the Customer model attached to Invoice
-# ----------------------------------------------------------------------
-def get_customer_model():
-    Invoice = get_invoice_model()
-    # First try the direct import
-    try:
-        return apps.get_model('sage_invoice', 'CustomerProfile')
-    except LookupError:
-        pass
-    # Then scan Invoice's fields for a ForeignKey to a customer-like model
-    for field in Invoice._meta.get_fields():
-        if field.is_relation and field.many_to_one and field.remote_field:
-            related_model = field.remote_field.model
-            if 'customer' in related_model.__name__.lower():
-                return related_model
-    # Fallback
-    try:
-        return apps.get_model('sage_invoice', 'Customer')
-    except LookupError:
-        return None
 
 
 # ----------------------------------------------------------------------
@@ -415,7 +397,7 @@ def get_item_model():
 
 
 # ----------------------------------------------------------------------
-# Category ViewSet (optional)
+# Category ViewSet
 # ----------------------------------------------------------------------
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
@@ -435,14 +417,14 @@ class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
             class CategorySerializer(serializers.ModelSerializer):
                 class Meta:
                     model = Category
-                    fields = '__all__'
+                    fields = ['id', 'name', 'description']
             return CategorySerializer
         except LookupError:
             return serializers.Serializer
 
 
 # ----------------------------------------------------------------------
-# Service ViewSet (works, no changes)
+# Service ViewSet (unchanged, works)
 # ----------------------------------------------------------------------
 class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
@@ -479,32 +461,7 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 # ----------------------------------------------------------------------
-# Customer ViewSet
-# ----------------------------------------------------------------------
-class CustomerViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
-    http_method_names = ['get', 'post', 'put', 'patch', 'delete']
-
-    def get_queryset(self):
-        Customer = get_customer_model()
-        if Customer:
-            return Customer.objects.all()
-        return []
-
-    def get_serializer_class(self):
-        from rest_framework import serializers
-        Customer = get_customer_model()
-        if not Customer:
-            return serializers.Serializer
-        class CustomerSerializer(serializers.ModelSerializer):
-            class Meta:
-                model = Customer
-                fields = '__all__'
-        return CustomerSerializer
-
-
-# ----------------------------------------------------------------------
-# Invoice ViewSet – simplified, no assumptions about field names
+# Invoice ViewSet – using direct fields on Invoice (customer_name, contacts)
 # ----------------------------------------------------------------------
 class InvoiceViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
@@ -517,7 +474,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         from .serializers import InvoiceReadSerializer
         return InvoiceReadSerializer
 
-    # We disable the default create/update because frontend uses create_with_items
+    # Disable default create/update because frontend uses create_with_items
     def create(self, request, *args, **kwargs):
         return Response({"detail": "Use /create_with_items/ to create invoices"}, status=405)
 
@@ -526,60 +483,60 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def create_with_items(self, request):
+        """
+        POST /api/payments/invoices/create_with_items/
+        Creates invoice from frontend data.
+        """
         from services.models import Service
         from .serializers import InvoiceCreationRequestSerializer, InvoiceReadSerializer
 
         Invoice = get_invoice_model()
-        Customer = get_customer_model()
         ItemModel = get_item_model()
-
-        if not Customer or not ItemModel:
-            return Response({"error": "Invoice models not properly configured"}, status=500)
 
         serializer = InvoiceCreationRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
         data = serializer.validated_data
-        customer_email = data['customer_email']
-        customer_name = data.get('customer_name', '')
 
-        # Create or get customer (using email)
-        try:
-            customer, _ = Customer.objects.get_or_create(
-                email=customer_email,
-                defaults={'name': customer_name}
-            )
-        except TypeError:
-            # Some customer models may not have 'name'
-            customer, _ = Customer.objects.get_or_create(email=customer_email)
-
-        invoice_params = {
-            'customer': customer,
-            'status': data.get('status', 'draft'),
-            'issue_date': data.get('issue_date'),
-            'due_date': data.get('due_date'),
+        # Build contacts JSON field (email + optional phone)
+        contacts = {
+            'email': data['customer_email'],
+            'phone': data.get('customer_phone', ''),
         }
-        if data.get('title'):
-            invoice_params['title'] = data['title']
-        if data.get('currency'):
-            invoice_params['currency'] = data['currency']
-        if data.get('notes'):
-            invoice_params['notes'] = data['notes']
-        if data.get('template_choice'):
-            invoice_params['template_choice'] = data['template_choice']
 
+        # Prepare invoice parameters (using actual field names)
+        invoice_params = {
+            'invoice_date': data.get('invoice_date'),
+            'due_date': data.get('due_date'),
+            'status': data.get('status', 'draft'),
+            'receipt': data.get('receipt', False),
+            'currency': data.get('currency', 'USD'),
+            'notes': data.get('notes', ''),
+            'template_choice': data.get('template_choice', 'quotation_1'),
+            'customer_name': data.get('customer_name', ''),
+            'contacts': contacts,
+            'title': data.get('title', ''),
+        }
+
+        # Optional category
+        if data.get('category'):
+            invoice_params['category_id'] = data['category']
+
+        # Create invoice
         try:
             invoice = Invoice.objects.create(**invoice_params)
-        except TypeError:
-            # Fallback in case the model doesn't accept all fields
+        except TypeError as e:
+            # Fallback in case some field names don't match
             invoice = Invoice.objects.create(
-                customer=customer,
+                invoice_date=data.get('invoice_date'),
+                due_date=data.get('due_date'),
                 status=data.get('status', 'draft'),
-                issue_date=data.get('issue_date'),
-                due_date=data.get('due_date')
+                customer_name=data.get('customer_name', ''),
+                contacts=contacts,
             )
 
+        # Process items
         total = Decimal('0.00')
         for item_data in data['items']:
             service_id = item_data.get('service_id')
@@ -617,14 +574,19 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             }
             if discount != 0:
                 item_params['discount_rate'] = discount
-
             try:
                 ItemModel.objects.create(**item_params)
             except TypeError:
                 item_params.pop('discount_rate', None)
                 ItemModel.objects.create(**item_params)
 
-        invoice.total_amount = total
+        # Apply global percentages
+        tax_pct = Decimal(str(data.get('tax_percentage', 0)))
+        discount_pct = Decimal(str(data.get('discount_percentage', 0)))
+        concession_pct = Decimal(str(data.get('concession_percentage', 0)))
+        final_total = total * (1 + tax_pct/100) * (1 - discount_pct/100) * (1 - concession_pct/100)
+
+        invoice.total_amount = final_total
         invoice.save()
 
         out_serializer = InvoiceReadSerializer(invoice)

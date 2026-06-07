@@ -64,25 +64,18 @@ class CheckoutResponseSerializer(serializers.Serializer):
 # Invoice Full Serializers (Read & Write)
 # ============================================================================
 
+# ============================================================================
+# Invoice Full Serializers (Read & Write) – using actual Invoice model fields
+# ============================================================================
+
 class CategorySerializer(serializers.Serializer):
-    """Category reference for invoices"""
     id = serializers.IntegerField()
     name = serializers.CharField()
     description = serializers.CharField(required=False, allow_blank=True)
 
 
-class CustomerProfileDetailSerializer(serializers.Serializer):
-    """Detailed customer info for invoice (read-only)"""
-    id = serializers.IntegerField()
-    name = serializers.CharField()
-    email = serializers.EmailField()
-    phone = serializers.CharField(required=False, allow_blank=True)
-    address = serializers.CharField(required=False, allow_blank=True)
-
-
 class InvoiceItemWriteSerializer(serializers.Serializer):
-    """Serializer for creating/updating invoice line items directly"""
-    id = serializers.IntegerField(required=False)          # for updates
+    id = serializers.IntegerField(required=False)
     description = serializers.CharField()
     quantity = serializers.IntegerField(min_value=1)
     measurement_unit = serializers.CharField(required=False, allow_blank=True)
@@ -93,7 +86,6 @@ class InvoiceItemWriteSerializer(serializers.Serializer):
 
 
 class InvoiceItemReadSerializer(serializers.Serializer):
-    """Read-only representation of invoice items"""
     id = serializers.IntegerField()
     description = serializers.CharField()
     quantity = serializers.IntegerField()
@@ -105,70 +97,68 @@ class InvoiceItemReadSerializer(serializers.Serializer):
 
 
 class InvoiceWriteSerializer(serializers.Serializer):
-    """
-    Full invoice serializer for create/update operations.
-    All fields are optional for updates.
-    """
+    """For full create/update (not used by the React form directly)"""
     title = serializers.CharField(required=False, allow_blank=True)
     slug = serializers.CharField(required=False, allow_blank=True)
-    invoice_number = serializers.CharField(required=False, allow_blank=True)
+    invoice_date = serializers.DateField(required=True)
     tracking_code = serializers.CharField(required=False, allow_blank=True)
-    issue_date = serializers.DateField(required=False)
-    due_date = serializers.DateField(required=False)
-    customer = serializers.IntegerField(required=False)          
-    status = serializers.ChoiceField(choices=['draft', 'sent', 'paid', 'overdue', 'cancelled'], required=False)
-    is_receipt = serializers.BooleanField(required=False, default=False)
-    currency = serializers.CharField(required=False, default='USD')
-    total_amount = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, read_only=True)
-    category = serializers.IntegerField(required=False, allow_null=True)   
+    due_date = serializers.DateField(required=True)
+    status = serializers.ChoiceField(choices=['draft', 'sent', 'paid', 'overdue', 'cancelled'], default='draft')
+    receipt = serializers.BooleanField(default=False)
+    currency = serializers.CharField(default='USD')
     notes = serializers.CharField(required=False, allow_blank=True)
+    template_choice = serializers.CharField(required=False, allow_blank=True)
+    category = serializers.IntegerField(required=False, allow_null=True)
     logo = serializers.ImageField(required=False, allow_null=True)
     signature = serializers.ImageField(required=False, allow_null=True)
     stamp = serializers.ImageField(required=False, allow_null=True)
-    template_choice = serializers.CharField(required=False, allow_blank=True)
     items = InvoiceItemWriteSerializer(many=True, required=False)
-    tax_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=0)
-    discount_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=0)
-    concession_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=0)
+    tax_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
+    discount_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
+    concession_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, default=0)
+    # Customer fields (directly on Invoice)
+    customer_name = serializers.CharField(required=True)
+    contacts = serializers.JSONField(required=False)   # expected: {"email": "...", "phone": "..."}
 
 
 class InvoiceReadSerializer(serializers.Serializer):
-    """Full invoice representation for API responses"""
     id = serializers.IntegerField()
     invoice_number = serializers.CharField()
-    title = serializers.CharField(required=False)
-    slug = serializers.CharField(required=False)
-    tracking_code = serializers.CharField(required=False)
-    issue_date = serializers.DateField()
+    title = serializers.CharField()
+    slug = serializers.CharField()
+    invoice_date = serializers.DateField()
+    tracking_code = serializers.CharField()
     due_date = serializers.DateField()
     status = serializers.CharField()
-    is_receipt = serializers.BooleanField()
+    receipt = serializers.BooleanField()
     currency = serializers.CharField()
     total_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
-    category = CategorySerializer(required=False, allow_null=True)
-    notes = serializers.CharField(required=False)
-    logo = serializers.CharField(required=False)       
-    signature = serializers.CharField(required=False) 
-    stamp = serializers.CharField(required=False)     
-    template_choice = serializers.CharField(required=False)
-    customer_detail = CustomerProfileDetailSerializer(source='customer', read_only=True)
-    items = InvoiceItemReadSerializer(many=True, read_only=True)
+    category = CategorySerializer(allow_null=True)
+    notes = serializers.CharField()
+    logo = serializers.CharField()
+    signature = serializers.CharField()
+    stamp = serializers.CharField()
+    template_choice = serializers.CharField()
+    items = InvoiceItemReadSerializer(many=True)
     created_at = serializers.DateTimeField()
     updated_at = serializers.DateTimeField()
+    # Customer fields
+    customer_name = serializers.CharField()
+    contacts = serializers.JSONField()
 
 
 class InvoiceListSerializer(serializers.Serializer):
-    """Lightweight serializer for invoice list view (with filters)"""
+    """Lightweight for list views"""
     id = serializers.IntegerField()
     invoice_number = serializers.CharField()
-    title = serializers.CharField(required=False)
-    issue_date = serializers.DateField()
+    title = serializers.CharField()
+    invoice_date = serializers.DateField()
     due_date = serializers.DateField()
     status = serializers.CharField()
     currency = serializers.CharField()
     total_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
-    customer_name = serializers.CharField(source='customer.name', read_only=True)
-    customer_email = serializers.EmailField(source='customer.email', read_only=True)
+    customer_name = serializers.CharField()
+    contacts = serializers.JSONField()
 
 
 # ============================================================================
@@ -176,7 +166,6 @@ class InvoiceListSerializer(serializers.Serializer):
 # ============================================================================
 
 class InvoiceItemPayloadSerializer(serializers.Serializer):
-    """Validates individual items coming from the React Mega Form"""
     service_id = serializers.IntegerField(required=False, allow_null=True)
     description = serializers.CharField(required=False, allow_blank=True)
     quantity = serializers.IntegerField(default=1, min_value=1)
@@ -185,28 +174,29 @@ class InvoiceItemPayloadSerializer(serializers.Serializer):
     discount = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=0)
 
     def validate(self, data):
-        # Must provide either a service_id or a manual description
         if not data.get('service_id') and not data.get('description'):
             raise serializers.ValidationError("Must provide either a service_id or a description.")
         return data
 
 
 class InvoiceCreationRequestSerializer(serializers.Serializer):
-    """
-    Validates incoming request to create an invoice from the React dashboard.
-    Accepts the full suite of fields generated by the new frontend UI.
-    """
-    customer_email = serializers.EmailField()
+    """For the React mega form – matches frontend payload"""
+    customer_email = serializers.EmailField(required=True)
     customer_name = serializers.CharField(required=False, allow_blank=True)
+    customer_phone = serializers.CharField(required=False, allow_blank=True)
     title = serializers.CharField(required=False, allow_blank=True)
     status = serializers.CharField(required=False, default='draft')
     currency = serializers.CharField(required=False, default='USD')
     notes = serializers.CharField(required=False, allow_blank=True)
     template_choice = serializers.CharField(required=False, default='quotation_1')
-    issue_date = serializers.DateField(required=False, allow_null=True)
+    invoice_date = serializers.DateField(required=False, allow_null=True)
     due_date = serializers.DateField(required=False, allow_null=True)
-    
+    receipt = serializers.BooleanField(required=False, default=False)
+    category = serializers.IntegerField(required=False, allow_null=True)
     items = InvoiceItemPayloadSerializer(many=True, required=True)
+    tax_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=0)
+    discount_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=0)
+    concession_percentage = serializers.DecimalField(max_digits=5, decimal_places=2, required=False, default=0)
 
     def validate_items(self, value):
         if not value:
@@ -215,8 +205,8 @@ class InvoiceCreationRequestSerializer(serializers.Serializer):
 
 
 class ServiceListSerializer(serializers.Serializer):
-    """Serializer for listing services (used in ServiceViewSet)"""
     id = serializers.IntegerField()
     name = serializers.CharField()
     price = serializers.DecimalField(max_digits=10, decimal_places=2)
     description = serializers.CharField(required=False, allow_blank=True)
+    duration_minutes = serializers.IntegerField(required=False)
