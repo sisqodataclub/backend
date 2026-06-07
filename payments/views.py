@@ -377,6 +377,8 @@ from rest_framework.response import Response
 from django.http import HttpResponse
 from decimal import Decimal
 from django.apps import apps
+from django.db import transaction
+import uuid
 
 
 def get_invoice_model():
@@ -477,6 +479,10 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
     @action(detail=False, methods=['post'])
     def create_with_items(self, request):
+        """
+        POST /api/payments/invoices/create_with_items/
+        Creates invoice, items, and expense record with full error handling.
+        """
         from services.models import Service
         from .serializers import InvoiceCreationRequestSerializer, InvoiceReadSerializer
 
@@ -484,13 +490,14 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         ItemModel = get_item_model()
         Expense = get_expense_model()
 
+        # Validate incoming data
         serializer = InvoiceCreationRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=400)
 
         data = serializer.validated_data
 
-        # Build contacts JSON exactly as sage_invoice expects
+        # --- 1. Build contacts JSON (sage_invoice format) ---
         contacts = {
             "Contact Info": {
                 "email": data['customer_email'],
@@ -498,13 +505,20 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             }
         }
 
-        # Format notes to match Sage's strict JSON Array schema
+        # --- 2. Format notes as JSON array ---
         notes_json = []
         raw_notes = data.get('notes', '')
         if raw_notes:
             notes_json.append({"label": "Additional Notes", "content": raw_notes})
 
-        # Map frontend fields (issue_date → invoice_date)
+        # --- 3. Ensure unique title (prevent IntegrityError) ---
+        title = data.get('title', '').strip()
+        if not title:
+            title = f"Invoice-{uuid.uuid4().hex[:8]}"
+        elif Invoice.objects.filter(title=title).exists():
+            title = f"{title}-{uuid.uuid4().hex[:4]}"
+
+        # --- 4. Prepare invoice parameters ---
         invoice_params = {
             'invoice_date': data.get('issue_date'),
             'due_date': data.get('due_date'),
@@ -515,73 +529,93 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             'template_choice': data.get('template_choice', 'quotation_1'),
             'customer_name': data.get('customer_name', ''),
             'contacts': contacts,
-            'title': data.get('title', ''),
+            'title': title,
         }
         if data.get('category'):
             invoice_params['category_id'] = data['category']
 
-        invoice = Invoice.objects.create(**invoice_params)
+        # --- 5. Atomic transaction (rollback on any error) ---
+        try:
+            with transaction.atomic():
+                # Create invoice
+                invoice = Invoice.objects.create(**invoice_params)
 
-        # Create items and compute subtotal (including per‑item tax/discount)
-        subtotal = Decimal('0.00')
-        for item_data in data['items']:
-            service_id = item_data.get('service_id')
-            if service_id:
-                service = Service.objects.get(id=service_id)
-                if service.price_fixed is not None:
-                    unit_price = Decimal(str(service.price_fixed))
-                elif service.price_per_hour is not None:
-                    hours = Decimal(str(service.duration_minutes)) / Decimal('60')
-                    unit_price = Decimal(str(service.price_per_hour)) * hours
-                else:
-                    unit_price = Decimal('0.00')
-                description = service.name
-            else:
-                unit_price = Decimal(str(item_data.get('unit_price', 0)))
-                description = item_data.get('description', '')
+                # Create items and compute subtotal
+                subtotal = Decimal('0.00')
+                for item_data in data['items']:
+                    service_id = item_data.get('service_id')
+                    if service_id:
+                        service = Service.objects.get(id=service_id)
+                        if service.price_fixed is not None:
+                            unit_price = Decimal(str(service.price_fixed))
+                        elif service.price_per_hour is not None:
+                            hours = Decimal(str(service.duration_minutes)) / Decimal('60')
+                            unit_price = Decimal(str(service.price_per_hour)) * hours
+                        else:
+                            unit_price = Decimal('0.00')
+                        description = service.name
+                    else:
+                        unit_price = Decimal(str(item_data.get('unit_price', 0)))
+                        description = item_data.get('description', '')
 
-            quantity = Decimal(str(item_data.get('quantity', 1)))
-            tax_rate = Decimal(str(item_data.get('tax_rate', 0)))
-            discount = Decimal(str(item_data.get('discount', 0)))
-            measurement = item_data.get('measurement', '')
+                    quantity = Decimal(str(item_data.get('quantity', 1)))
+                    tax_rate = Decimal(str(item_data.get('tax_rate', 0)))
+                    discount = Decimal(str(item_data.get('discount', 0)))
+                    measurement = item_data.get('measurement', '')
 
-            # Line total including per‑item tax/discount (affects subtotal, not stored on Item)
-            line_total = quantity * unit_price * (1 + tax_rate/100) * (1 - discount/100)
-            subtotal += line_total
+                    line_total = quantity * unit_price * (1 + tax_rate/100) * (1 - discount/100)
+                    subtotal += line_total
 
-            # Create the item (per‑item tax/discount not stored on item)
-            ItemModel.objects.create(
-                invoice=invoice,
-                description=description,
-                quantity=int(quantity),
-                unit_price=unit_price,
-                measurement=measurement,
-            )
+                    # Create item (per‑item tax/discount not stored on item)
+                    ItemModel.objects.create(
+                        invoice=invoice,
+                        description=description,
+                        quantity=int(quantity),
+                        unit_price=unit_price,
+                        measurement=measurement,
+                    )
 
-        # Apply global percentages and create Expense record
-        tax_pct = Decimal(str(data.get('tax_percentage', 0)))
-        discount_pct = Decimal(str(data.get('discount_percentage', 0)))
-        concession_pct = Decimal(str(data.get('concession_percentage', 0)))
+                # --- 6. Create or update Expense (avoid duplicate) ---
+                tax_pct = Decimal(str(data.get('tax_percentage', 0)))
+                discount_pct = Decimal(str(data.get('discount_percentage', 0)))
+                concession_pct = Decimal(str(data.get('concession_percentage', 0)))
 
-        tax_amount = subtotal * (tax_pct / 100)
-        discount_amount = subtotal * (discount_pct / 100)
-        concession_amount = subtotal * (concession_pct / 100)
-        total_amount = subtotal + tax_amount - discount_amount - concession_amount
+                tax_amount = subtotal * (tax_pct / 100)
+                discount_amount = subtotal * (discount_pct / 100)
+                concession_amount = subtotal * (concession_pct / 100)
+                total_amount = subtotal + tax_amount - discount_amount - concession_amount
 
-        Expense.objects.create(
-            invoice=invoice,
-            subtotal=subtotal,
-            tax_percentage=tax_pct,
-            discount_percentage=discount_pct,
-            concession_percentage=concession_pct,
-            tax_amount=tax_amount,
-            discount_amount=discount_amount,
-            concession_amount=concession_amount,
-            total_amount=total_amount,
-        )
+                expense, created = Expense.objects.get_or_create(
+                    invoice=invoice,
+                    defaults={
+                        'subtotal': subtotal,
+                        'tax_percentage': tax_pct,
+                        'discount_percentage': discount_pct,
+                        'concession_percentage': concession_pct,
+                        'tax_amount': tax_amount,
+                        'discount_amount': discount_amount,
+                        'concession_amount': concession_amount,
+                        'total_amount': total_amount,
+                    }
+                )
+                if not created:
+                    # Update existing expense (in case of retry)
+                    expense.subtotal = subtotal
+                    expense.tax_percentage = tax_pct
+                    expense.discount_percentage = discount_pct
+                    expense.concession_percentage = concession_pct
+                    expense.tax_amount = tax_amount
+                    expense.discount_amount = discount_amount
+                    expense.concession_amount = concession_amount
+                    expense.total_amount = total_amount
+                    expense.save()
 
-        out_serializer = InvoiceReadSerializer(invoice)
-        return Response(out_serializer.data, status=201)
+                out_serializer = InvoiceReadSerializer(invoice)
+                return Response(out_serializer.data, status=201)
+
+        except Exception as e:
+            # Any other error (database, validation, etc.) returns 400
+            return Response({'error': str(e)}, status=400)
 
     @action(detail=True, methods=['get'], url_path='pdf')
     def download_pdf(self, request, pk=None):
