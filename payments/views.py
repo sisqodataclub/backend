@@ -374,66 +374,77 @@ from decimal import Decimal
 from django.apps import apps
 
 
-def get_sage_models():
-    """
-    Dynamically fetches the correct models from sage_invoice,
-    no matter how the package names them.
-    """
-    Invoice = apps.get_model('sage_invoice', 'Invoice')
+# ----------------------------------------------------------------------
+# Helper to get the Invoice model (always works)
+# ----------------------------------------------------------------------
+def get_invoice_model():
+    return apps.get_model('sage_invoice', 'Invoice')
 
-    # 1. Dynamically find the Customer model attached to the Invoice
-    CustomerModel = Invoice._meta.get_field('customer').related_model
 
-    # 2. Dynamically find the Item model attached to the Invoice
-    ItemModel = None
-    for rel in Invoice._meta.related_objects:
-        if 'item' in rel.related_model.__name__.lower() or 'line' in rel.related_model.__name__.lower():
-            ItemModel = rel.related_model
-            break
-    if not ItemModel:
-        try:
-            ItemModel = apps.get_model('sage_invoice', 'Item')
-        except LookupError:
-            ItemModel = apps.get_model('sage_invoice', 'InvoiceItem')
-
-    # 3. Dynamically find the Category model (Optional)
+# ----------------------------------------------------------------------
+# Helper to get the Customer model attached to Invoice
+# ----------------------------------------------------------------------
+def get_customer_model():
+    Invoice = get_invoice_model()
+    # First try the direct import
     try:
-        CategoryModel = apps.get_model('sage_invoice', 'Category')
+        return apps.get_model('sage_invoice', 'CustomerProfile')
     except LookupError:
-        CategoryModel = None
+        pass
+    # Then scan Invoice's fields for a ForeignKey to a customer-like model
+    for field in Invoice._meta.get_fields():
+        if field.is_relation and field.many_to_one and field.remote_field:
+            related_model = field.remote_field.model
+            if 'customer' in related_model.__name__.lower():
+                return related_model
+    # Fallback
+    try:
+        return apps.get_model('sage_invoice', 'Customer')
+    except LookupError:
+        return None
 
-    return Invoice, CustomerModel, ItemModel, CategoryModel
+
+# ----------------------------------------------------------------------
+# Helper to get the Item model (line items)
+# ----------------------------------------------------------------------
+def get_item_model():
+    try:
+        return apps.get_model('sage_invoice', 'Item')
+    except LookupError:
+        return apps.get_model('sage_invoice', 'InvoiceItem')
 
 
+# ----------------------------------------------------------------------
+# Category ViewSet (optional)
+# ----------------------------------------------------------------------
 class CategoryViewSet(viewsets.ReadOnlyModelViewSet):
-    """List categories (if the package has a Category model)"""
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get']
 
     def get_queryset(self):
-        _, _, _, CategoryModel = get_sage_models()
-        if CategoryModel:
-            return CategoryModel.objects.all()
-        return []
+        try:
+            Category = apps.get_model('sage_invoice', 'Category')
+            return Category.objects.all()
+        except LookupError:
+            return []
 
     def get_serializer_class(self):
         from rest_framework import serializers
-        _, _, _, CategoryModel = get_sage_models()
+        try:
+            Category = apps.get_model('sage_invoice', 'Category')
+            class CategorySerializer(serializers.ModelSerializer):
+                class Meta:
+                    model = Category
+                    fields = '__all__'
+            return CategorySerializer
+        except LookupError:
+            return serializers.Serializer
 
-        class CategorySerializer(serializers.ModelSerializer):
-            class Meta:
-                model = CategoryModel or apps.get_model('auth', 'User')  # Fallback to prevent crash
-                fields = '__all__'
-        return CategorySerializer
 
-
-# ✅ FIXED: ServiceViewSet that avoids DRF model field errors
+# ----------------------------------------------------------------------
+# Service ViewSet (works, no changes)
+# ----------------------------------------------------------------------
 class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
-    """
-    List all services for invoice item selection.
-    Converts price_fixed or price_per_hour to a unified 'price' field.
-    Includes tenant filtering (if tenant is present in request).
-    """
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get']
 
@@ -446,12 +457,10 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
         return qs
 
     def list(self, request, *args, **kwargs):
-        """Manually build response to avoid DRF serializer field errors."""
         from decimal import Decimal
         queryset = self.get_queryset()
         data = []
         for service in queryset:
-            # Compute the price based on the service's pricing model
             if service.price_fixed is not None:
                 price = Decimal(str(service.price_fixed))
             elif service.price_per_hour is not None:
@@ -459,7 +468,6 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
                 price = Decimal(str(service.price_per_hour)) * hours
             else:
                 price = Decimal('0')
-
             data.append({
                 'id': service.id,
                 'name': service.name,
@@ -470,46 +478,63 @@ class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(data)
 
 
+# ----------------------------------------------------------------------
+# Customer ViewSet
+# ----------------------------------------------------------------------
 class CustomerViewSet(viewsets.ModelViewSet):
-    """Manage invoice customers"""
     permission_classes = [permissions.IsAuthenticated]
     http_method_names = ['get', 'post', 'put', 'patch', 'delete']
 
     def get_queryset(self):
-        _, CustomerModel, _, _ = get_sage_models()
-        return CustomerModel.objects.all()
+        Customer = get_customer_model()
+        if Customer:
+            return Customer.objects.all()
+        return []
 
     def get_serializer_class(self):
         from rest_framework import serializers
-        _, CustomerModel, _, _ = get_sage_models()
-
-        class CustomerDynamicSerializer(serializers.ModelSerializer):
+        Customer = get_customer_model()
+        if not Customer:
+            return serializers.Serializer
+        class CustomerSerializer(serializers.ModelSerializer):
             class Meta:
-                model = CustomerModel
+                model = Customer
                 fields = '__all__'
-        return CustomerDynamicSerializer
+        return CustomerSerializer
 
 
+# ----------------------------------------------------------------------
+# Invoice ViewSet – simplified, no assumptions about field names
+# ----------------------------------------------------------------------
 class InvoiceViewSet(viewsets.ModelViewSet):
-    """Manage invoices – full CRUD + React Mega Form endpoint"""
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        Invoice, _, _, _ = get_sage_models()
+        Invoice = get_invoice_model()
         return Invoice.objects.all()
 
     def get_serializer_class(self):
         from .serializers import InvoiceReadSerializer
         return InvoiceReadSerializer
 
-    # ----------------------------------------------------------------------
-    # React Dashboard Mega Form Endpoint (create_with_items)
-    # ----------------------------------------------------------------------
+    # We disable the default create/update because frontend uses create_with_items
+    def create(self, request, *args, **kwargs):
+        return Response({"detail": "Use /create_with_items/ to create invoices"}, status=405)
+
+    def update(self, request, *args, **kwargs):
+        return Response({"detail": "Use partial_update or /create_with_items/"}, status=405)
+
     @action(detail=False, methods=['post'])
     def create_with_items(self, request):
         from services.models import Service
         from .serializers import InvoiceCreationRequestSerializer, InvoiceReadSerializer
-        Invoice, CustomerModel, ItemModel, CategoryModel = get_sage_models()
+
+        Invoice = get_invoice_model()
+        Customer = get_customer_model()
+        ItemModel = get_item_model()
+
+        if not Customer or not ItemModel:
+            return Response({"error": "Invoice models not properly configured"}, status=500)
 
         serializer = InvoiceCreationRequestSerializer(data=request.data)
         if not serializer.is_valid():
@@ -519,15 +544,15 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         customer_email = data['customer_email']
         customer_name = data.get('customer_name', '')
 
-        # Safe fetch/create based on whatever fields the Customer model actually has
+        # Create or get customer (using email)
         try:
-            customer, _ = CustomerModel.objects.get_or_create(
+            customer, _ = Customer.objects.get_or_create(
                 email=customer_email,
                 defaults={'name': customer_name}
             )
         except TypeError:
-            # Fallback if the Customer model doesn't have a 'name' field
-            customer, _ = CustomerModel.objects.get_or_create(email=customer_email)
+            # Some customer models may not have 'name'
+            customer, _ = Customer.objects.get_or_create(email=customer_email)
 
         invoice_params = {
             'customer': customer,
@@ -535,7 +560,6 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             'issue_date': data.get('issue_date'),
             'due_date': data.get('due_date'),
         }
-
         if data.get('title'):
             invoice_params['title'] = data['title']
         if data.get('currency'):
@@ -548,6 +572,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         try:
             invoice = Invoice.objects.create(**invoice_params)
         except TypeError:
+            # Fallback in case the model doesn't accept all fields
             invoice = Invoice.objects.create(
                 customer=customer,
                 status=data.get('status', 'draft'),
@@ -560,7 +585,6 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             service_id = item_data.get('service_id')
             if service_id:
                 service = Service.objects.get(id=service_id)
-                # Compute unit_price the same way as in the ServiceViewSet
                 if service.price_fixed is not None:
                     unit_price = Decimal(str(service.price_fixed))
                 elif service.price_per_hour is not None:
@@ -589,9 +613,8 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 'quantity': int(quantity),
                 'unit_price': unit_price,
                 'tax_rate': tax_rate,
-                'total': line_total
+                'total': line_total,
             }
-
             if discount != 0:
                 item_params['discount_rate'] = discount
 
