@@ -1,12 +1,15 @@
 """
 Payment Serializers
-Handles checkout requests and booking responses
+Handles checkout requests, booking responses, and invoices (without model imports)
 """
 from rest_framework import serializers
 from .models import Booking, BookingItem
 from products.models import Product
 
 
+# ============================================================================
+# Existing E-commerce Serializers (unchanged)
+# ============================================================================
 class CheckoutItemSerializer(serializers.Serializer):
     """
     Serializer for items in checkout request
@@ -27,7 +30,7 @@ class CreateCheckoutSerializer(serializers.Serializer):
     customer_name = serializers.CharField(required=False, allow_blank=True)
     is_gift = serializers.BooleanField(default=False)
     gift_message = serializers.CharField(required=False, allow_blank=True)
-    
+
     def validate_items(self, value):
         """Ensure at least one item"""
         if not value:
@@ -37,7 +40,7 @@ class CreateCheckoutSerializer(serializers.Serializer):
 
 class BookingItemSerializer(serializers.ModelSerializer):
     """Serializer for booking items"""
-    
+
     class Meta:
         model = BookingItem
         fields = [
@@ -55,7 +58,7 @@ class BookingItemSerializer(serializers.ModelSerializer):
 class BookingSerializer(serializers.ModelSerializer):
     """Serializer for booking/order details"""
     items = BookingItemSerializer(many=True, read_only=True)
-    
+
     class Meta:
         model = Booking
         fields = [
@@ -92,37 +95,75 @@ class CheckoutResponseSerializer(serializers.Serializer):
     session_id = serializers.CharField()
 
 
+# ============================================================================
+# Invoice-related Serializers (no direct model imports)
+# ============================================================================
+
+class InvoiceCreationRequestSerializer(serializers.Serializer):
+    """
+    Validates incoming request to create an invoice from service selections.
+    Does not import any sage_invoice models.
+    """
+    customer_email = serializers.EmailField()
+    customer_name = serializers.CharField(required=False, allow_blank=True)
+    issue_date = serializers.DateField(required=False)
+    due_date = serializers.DateField(required=False)
+    items = serializers.ListField(
+        child=serializers.DictField(),
+        required=True
+    )
+
+    def validate_items(self, value):
+        if not value:
+            raise serializers.ValidationError("At least one item is required.")
+        for idx, item in enumerate(value):
+            # Each item must have either service_id or description
+            if 'service_id' not in item and not item.get('description'):
+                raise serializers.ValidationError(
+                    f"Item {idx}: must provide either service_id or description"
+                )
+            if item.get('quantity', 0) <= 0:
+                raise serializers.ValidationError(
+                    f"Item {idx}: quantity must be positive"
+                )
+        return value
 
 
+class InvoiceItemSerializer(serializers.Serializer):
+    """Read-only representation of invoice items (for API responses)"""
+    id = serializers.IntegerField()
+    description = serializers.CharField()
+    quantity = serializers.IntegerField()
+    unit_price = serializers.DecimalField(max_digits=10, decimal_places=2)
+    tax_rate = serializers.DecimalField(max_digits=5, decimal_places=2)
+    total = serializers.DecimalField(max_digits=10, decimal_places=2)
 
-# payments/serializers.py (add these)
-from sage_invoice.models import Customer, Invoice, InvoiceItem
-from services.models import Service  # adjust if your Service model is elsewhere
 
-class ServiceSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Service
-        fields = ['id', 'name', 'price', 'description']
+class CustomerProfileSerializer(serializers.Serializer):
+    """Read-only customer info from sage_invoice"""
+    id = serializers.IntegerField()
+    name = serializers.CharField(allow_blank=True)
+    email = serializers.EmailField()
+    phone = serializers.CharField(required=False, allow_blank=True)
+    address = serializers.CharField(required=False, allow_blank=True)
 
-class CustomerSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Customer
-        fields = ['id', 'name', 'email', 'phone', 'address']
 
-class InvoiceItemSerializer(serializers.ModelSerializer):
-    service_id = serializers.IntegerField(write_only=True, required=False)
-    service_name = serializers.CharField(source='description', read_only=True)
-
-    class Meta:
-        model = InvoiceItem
-        fields = ['id', 'description', 'quantity', 'unit_price', 'tax_rate', 'total', 'service_id', 'service_name']
-        read_only_fields = ['total']
-
-class InvoiceSerializer(serializers.ModelSerializer):
+class InvoiceSerializer(serializers.Serializer):
+    """Read-only invoice representation (matches sage_invoice.Invoice)"""
+    id = serializers.IntegerField()
+    invoice_number = serializers.CharField()
+    status = serializers.CharField()
+    issue_date = serializers.DateField()
+    due_date = serializers.DateField()
+    total_amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    created_at = serializers.DateTimeField()
+    customer_detail = CustomerProfileSerializer(source='customer', read_only=True)
     items = InvoiceItemSerializer(many=True, read_only=True)
-    customer_detail = CustomerSerializer(source='customer', read_only=True)
 
-    class Meta:
-        model = Invoice
-        fields = ['id', 'invoice_number', 'customer', 'customer_detail', 'status',
-                  'issue_date', 'due_date', 'total_amount', 'items', 'created_at']
+
+class ServiceListSerializer(serializers.Serializer):
+    """Serializer for listing services (used in ServiceViewSet)"""
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    price = serializers.DecimalField(max_digits=10, decimal_places=2)
+    description = serializers.CharField(required=False, allow_blank=True)

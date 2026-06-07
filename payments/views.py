@@ -419,47 +419,90 @@ def capture_service_payment(request, booking_id):
 
 
 # payments/views.py (add at the bottom)
+# payments/views.py – add at the bottom (after existing e‑commerce code)
+
+# ============================================================================
+# INVOICE‑RELATED VIEWSETS (no top‑level imports, lazy loading)
+# ============================================================================
+
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from django.http import HttpResponse
-from django.template.loader import render_to_string
-from weasyprint import HTML
-from sage_invoice.models import Customer, Invoice, InvoiceItem
-from services.models import Service
-from .serializers import ServiceSerializer, CustomerSerializer, InvoiceSerializer
+from decimal import Decimal
+
 
 class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
-    """List all services (for invoice item selection)"""
+    """List all services for invoice item selection"""
     permission_classes = [permissions.IsAuthenticated]
-    serializer_class = ServiceSerializer
-    queryset = Service.objects.all()
+    http_method_names = ['get']          # only GET allowed
+
+    def get_queryset(self):
+        from services.models import Service
+        return Service.objects.all()
+
+    def get_serializer_class(self):
+        from rest_framework import serializers
+        from services.models import Service
+
+        class ServiceSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = Service
+                fields = ['id', 'name', 'price', 'description']
+        return ServiceSerializer
+
 
 class CustomerViewSet(viewsets.ModelViewSet):
-    """Manage invoice customers"""
+    """Manage invoice customers (auto‑created when needed)"""
     permission_classes = [permissions.IsAuthenticated]
-    serializer_class = CustomerSerializer
-    queryset = Customer.objects.all()
+    http_method_names = ['get', 'post']   # only GET and POST
+
+    def get_queryset(self):
+        from sage_invoice.models import CustomerProfile
+        return CustomerProfile.objects.all()
+
+    def get_serializer_class(self):
+        from rest_framework import serializers
+        from sage_invoice.models import CustomerProfile
+
+        class CustomerSerializer(serializers.ModelSerializer):
+            class Meta:
+                model = CustomerProfile
+                fields = ['id', 'name', 'email', 'phone', 'address']
+        return CustomerSerializer
+
 
 class InvoiceViewSet(viewsets.ModelViewSet):
     """Manage invoices"""
     permission_classes = [permissions.IsAuthenticated]
-    serializer_class = InvoiceSerializer
-    queryset = Invoice.objects.all()
+
+    def get_queryset(self):
+        from sage_invoice.models import Invoice
+        return Invoice.objects.all()
+
+    def get_serializer_class(self):
+        from .serializers import InvoiceSerializer
+        return InvoiceSerializer
 
     @action(detail=False, methods=['post'])
     def create_with_items(self, request):
         """
         POST /api/payments/invoices/create_with_items/
-        Create invoice with line items selected from services.
+        Creates invoice and line items from service selections.
         """
-        data = request.data
-        customer_email = data.get('customer_email')
-        customer_name = data.get('customer_name', '')
-        items_data = data.get('items', [])
+        from sage_invoice.models import CustomerProfile, Invoice, Item
+        from services.models import Service
+        from .serializers import InvoiceCreationRequestSerializer, InvoiceSerializer as InvoiceOutSerializer
 
-        # Create or get customer
-        customer, _ = Customer.objects.get_or_create(
+        serializer = InvoiceCreationRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        data = serializer.validated_data
+        customer_email = data['customer_email']
+        customer_name = data.get('customer_name', '')
+
+        customer, _ = CustomerProfile.objects.get_or_create(
             email=customer_email,
             defaults={'name': customer_name}
         )
@@ -471,23 +514,23 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             due_date=data.get('due_date')
         )
 
-        total = 0
-        for item in items_data:
-            service_id = item.get('service_id')
+        total = Decimal('0.00')
+        for item_data in data['items']:
+            service_id = item_data.get('service_id')
             if service_id:
                 service = Service.objects.get(id=service_id)
                 unit_price = service.price
                 description = service.name
             else:
-                unit_price = item.get('unit_price', 0)
-                description = item.get('description', '')
+                unit_price = Decimal(str(item_data.get('unit_price', 0)))
+                description = item_data.get('description', '')
 
-            quantity = item.get('quantity', 1)
-            tax_rate = item.get('tax_rate', 0)
-            line_total = quantity * unit_price * (1 + tax_rate/100)
+            quantity = item_data.get('quantity', 1)
+            tax_rate = Decimal(str(item_data.get('tax_rate', 0)))
+            line_total = Decimal(quantity) * unit_price * (1 + tax_rate / 100)
             total += line_total
 
-            InvoiceItem.objects.create(
+            Item.objects.create(
                 invoice=invoice,
                 description=description,
                 quantity=quantity,
@@ -498,26 +541,24 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
         invoice.total_amount = total
         invoice.save()
-        serializer = self.get_serializer(invoice)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        out_serializer = InvoiceOutSerializer(invoice)
+        return Response(out_serializer.data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['get'], url_path='pdf')
     def download_pdf(self, request, pk=None):
         """Download invoice as PDF"""
+        from django.template.loader import render_to_string
+        from weasyprint import HTML
+
         invoice = self.get_object()
-        # Use sage_invoice's built-in PDF generator if available
         try:
             pdf = invoice.generate_pdf()
             response = HttpResponse(pdf, content_type='application/pdf')
         except AttributeError:
-            # Fallback: render HTML template and convert
             html_string = render_to_string('invoice_pdf.html', {'invoice': invoice})
             html = HTML(string=html_string)
             pdf = html.write_pdf()
             response = HttpResponse(pdf, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="invoice_{invoice.invoice_number}.pdf"'
         return response
-
-
-
-
