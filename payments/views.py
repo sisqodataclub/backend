@@ -470,13 +470,128 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         from .serializers import InvoiceReadSerializer
         return InvoiceReadSerializer
 
-    # Disable default create/update because frontend uses custom endpoint
+    # Disable default create/update because frontend uses custom endpoints
     def create(self, request, *args, **kwargs):
         return Response({"detail": "Use /create_with_items/ to create invoices"}, status=405)
 
     def update(self, request, *args, **kwargs):
-        return Response({"detail": "Use partial_update or /create_with_items/"}, status=405)
+        return Response({"detail": "Use edit_invoice or /create_with_items/"}, status=405)
 
+    # ------------------------------------------------------------------
+    # Helper to generate PDF bytes (shared between download and email)
+    # ------------------------------------------------------------------
+    def _generate_pdf(self, invoice) -> bytes:
+        from .serializers import InvoiceReadSerializer
+        from django.template.loader import render_to_string
+        from weasyprint import HTML
+
+        serializer = InvoiceReadSerializer(invoice)
+        invoice_data = serializer.data
+
+        contacts = invoice_data.get('contacts', {})
+        if isinstance(contacts, dict):
+            contact_info = contacts.get('Contact Info', {})
+            customer_email = contact_info.get('email', '')
+            customer_phone = contact_info.get('phone', '')
+        else:
+            customer_email = ''
+            customer_phone = ''
+
+        context = {
+            'invoice': invoice_data,
+            'customer_name': invoice_data.get('customer_name', ''),
+            'customer_email': customer_email,
+            'customer_phone': customer_phone,
+            'items': invoice_data.get('items', []),
+            'expense': invoice_data.get('expense', {}),
+        }
+        html_string = render_to_string('invoice_pdf.html', context)
+        return HTML(string=html_string).write_pdf()
+
+    # ------------------------------------------------------------------
+    # Download PDF
+    # ------------------------------------------------------------------
+    @action(detail=True, methods=['get'], url_path='pdf')
+    def download_pdf(self, request, pk=None):
+        from django.http import HttpResponse
+
+        invoice = self.get_object()
+        pdf_file = self._generate_pdf(invoice)
+        response = HttpResponse(pdf_file, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="invoice_{invoice.id}.pdf"'
+        return response
+
+    # ------------------------------------------------------------------
+    # Email Invoice
+    # ------------------------------------------------------------------
+    @action(detail=True, methods=['post'], url_path='email')
+    def email_invoice(self, request, pk=None):
+        from django.core.mail import EmailMessage
+        from django.conf import settings
+        import smtplib
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        invoice = self.get_object()
+        pdf_file = self._generate_pdf(invoice)
+
+        # Formatted invoice number (matches serializer's invoice_number)
+        formatted_invoice_number = f"INV-{invoice.id:06d}"
+
+        # Extract customer email from contacts
+        try:
+            contacts = invoice.contacts
+            if contacts and isinstance(contacts, dict):
+                contact_info = contacts.get('Contact Info', {})
+                customer_email = contact_info.get('email', '')
+            else:
+                customer_email = ''
+        except Exception:
+            customer_email = ''
+
+        if not customer_email:
+            return Response({'error': 'No customer email found for this invoice'}, status=400)
+
+        customer_name = invoice.customer_name or 'Customer'
+        total_amount = getattr(invoice.expense, 'total_amount', 0) if hasattr(invoice, 'expense') else 0
+        currency = invoice.currency or 'USD'
+
+        subject = f'Invoice {formatted_invoice_number}'
+        message = f"""Dear {customer_name},
+
+Please find attached your invoice.
+
+Invoice Number: {formatted_invoice_number}
+Invoice Date: {invoice.invoice_date}
+Due Date: {invoice.due_date}
+Total Amount: {total_amount} {currency}
+
+Thank you for your business.
+
+Best regards,
+Your Company Name
+"""
+
+        email = EmailMessage(
+            subject=subject,
+            body=message.strip(),
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            to=[customer_email],
+        )
+        email.attach(f'{formatted_invoice_number}.pdf', pdf_file, 'application/pdf')
+
+        try:
+            email.send(fail_silently=False)
+        except (smtplib.SMTPException, ConnectionRefusedError, TimeoutError) as e:
+            logger.error(f"Failed to send email for invoice {invoice.id}: {str(e)}")
+            return Response({'error': 'Failed to send email. Please check mail server configuration.'}, status=503)
+
+        return Response({'status': 'Email sent successfully'}, status=200)
+
+    # ------------------------------------------------------------------
+    # Create Invoice (full payload with items and expense)
+    # ------------------------------------------------------------------
     @action(detail=False, methods=['post'])
     def create_with_items(self, request):
         """
@@ -485,19 +600,21 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         """
         from services.models import Service
         from .serializers import InvoiceCreationRequestSerializer, InvoiceReadSerializer
+        import uuid
+        from decimal import Decimal
+        from django.db import transaction
 
         Invoice = get_invoice_model()
         ItemModel = get_item_model()
         Expense = get_expense_model()
 
-        # Validate incoming data
         serializer = InvoiceCreationRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=400)
 
         data = serializer.validated_data
 
-        # --- 1. Build contacts JSON (sage_invoice format) ---
+        # Build contacts JSON (sage_invoice format)
         contacts = {
             "Contact Info": {
                 "email": data['customer_email'],
@@ -505,20 +622,19 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             }
         }
 
-        # --- 2. Format notes as JSON array ---
+        # Format notes as JSON array
         notes_json = []
         raw_notes = data.get('notes', '')
         if raw_notes:
             notes_json.append({"label": "Additional Notes", "content": raw_notes})
 
-        # --- 3. Ensure unique title (prevent IntegrityError) ---
+        # Ensure unique title
         title = data.get('title', '').strip()
         if not title:
             title = f"Invoice-{uuid.uuid4().hex[:8]}"
         elif Invoice.objects.filter(title=title).exists():
             title = f"{title}-{uuid.uuid4().hex[:4]}"
 
-        # --- 4. Prepare invoice parameters ---
         invoice_params = {
             'invoice_date': data.get('issue_date'),
             'due_date': data.get('due_date'),
@@ -534,13 +650,10 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         if data.get('category'):
             invoice_params['category_id'] = data['category']
 
-        # --- 5. Atomic transaction (rollback on any error) ---
         try:
             with transaction.atomic():
-                # Create invoice
                 invoice = Invoice.objects.create(**invoice_params)
 
-                # Create items and compute subtotal
                 subtotal = Decimal('0.00')
                 for item_data in data['items']:
                     service_id = item_data.get('service_id')
@@ -566,7 +679,6 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                     line_total = quantity * unit_price * (1 + tax_rate/100) * (1 - discount/100)
                     subtotal += line_total
 
-                    # Create item (per‑item tax/discount not stored on item)
                     ItemModel.objects.create(
                         invoice=invoice,
                         description=description,
@@ -575,7 +687,6 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                         measurement=measurement,
                     )
 
-                # --- 6. Create or update Expense (avoid duplicate) ---
                 tax_pct = Decimal(str(data.get('tax_percentage', 0)))
                 discount_pct = Decimal(str(data.get('discount_percentage', 0)))
                 concession_pct = Decimal(str(data.get('concession_percentage', 0)))
@@ -599,7 +710,6 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                     }
                 )
                 if not created:
-                    # Update existing expense (in case of retry)
                     expense.subtotal = subtotal
                     expense.tax_percentage = tax_pct
                     expense.discount_percentage = discount_pct
@@ -616,42 +726,9 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response({'error': str(e)}, status=400)
 
-    @action(detail=True, methods=['get'], url_path='pdf')
-    def download_pdf(self, request, pk=None):
-        from .serializers import InvoiceReadSerializer
-        from django.template.loader import render_to_string
-        from weasyprint import HTML
-
-        invoice = self.get_object()
-        # Serialize the invoice to get full data (items, expense, contacts)
-        serializer = InvoiceReadSerializer(invoice)
-        invoice_data = serializer.data
-
-        # Extract contact info safely
-        contacts = invoice_data.get('contacts', {})
-        if isinstance(contacts, dict):
-            contact_info = contacts.get('Contact Info', {})
-            customer_email = contact_info.get('email', '')
-            customer_phone = contact_info.get('phone', '')
-        else:
-            customer_email = ''
-            customer_phone = ''
-
-        context = {
-            'invoice': invoice_data,
-            'customer_name': invoice_data.get('customer_name', ''),
-            'customer_email': customer_email,
-            'customer_phone': customer_phone,
-            'items': invoice_data.get('items', []),
-            'expense': invoice_data.get('expense', {}),
-        }
-
-        html_string = render_to_string('invoice_pdf.html', context)
-        pdf_file = HTML(string=html_string).write_pdf()
-        response = HttpResponse(pdf_file, content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="invoice_{invoice_data["invoice_number"]}.pdf"'
-        return response
-
+    # ------------------------------------------------------------------
+    # Edit Invoice (full update)
+    # ------------------------------------------------------------------
     @action(detail=True, methods=['put', 'patch'], url_path='edit')
     def edit_invoice(self, request, pk=None):
         """
@@ -661,6 +738,8 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         """
         from services.models import Service
         from .serializers import InvoiceCreationRequestSerializer, InvoiceReadSerializer
+        import uuid
+        from decimal import Decimal
 
         Invoice = get_invoice_model()
         ItemModel = get_item_model()
@@ -673,8 +752,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
         data = serializer.validated_data
 
-        # --- Update basic invoice fields ---
-        # Build contacts JSON
+        # Update basic invoice fields
         contacts = {
             "Contact Info": {
                 "email": data.get('customer_email', invoice.contacts.get('Contact Info', {}).get('email', '')),
@@ -682,7 +760,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
             }
         }
 
-        # Fix notes: handle deletion (if key present, even if empty)
+        # Notes: handle deletion (if key present, even if empty)
         if 'notes' in data:
             raw_notes = data['notes']
             notes_json = [{"label": "Additional Notes", "content": raw_notes}] if raw_notes else []
@@ -706,7 +784,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         invoice.contacts = contacts
         invoice.save()
 
-        # Update category (optional)
+        # Update category
         if 'category' in data:
             Category = get_category_model()
             if data['category']:
@@ -715,7 +793,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 invoice.category = None
             invoice.save()
 
-        # --- Replace items: delete all and recreate ---
+        # Replace items: delete all and recreate
         invoice.items.all().delete()
         subtotal = Decimal('0.00')
         for item_data in data.get('items', []):
@@ -750,7 +828,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 measurement=measurement,
             )
 
-        # --- Update Expense (always overwrite with new calculations) ---
+        # Update Expense
         tax_pct = Decimal(str(data.get('tax_percentage', 0)))
         discount_pct = Decimal(str(data.get('discount_percentage', 0)))
         concession_pct = Decimal(str(data.get('concession_percentage', 0)))
