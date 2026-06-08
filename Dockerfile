@@ -7,13 +7,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # Install system dependencies
 # curl: for healthchecks
-# libpq-dev & gcc: for building database drivers if needed
+# libpq-dev & gcc: for building database drivers
+# WeasyPrint dependencies: libpango, libglib, fontconfig, etc.
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     libpq-dev \
     postgresql-client \
     curl \
+    libpango-1.0-0 \
+    libpangoft2-1.0-0 \
+    libpangocairo-1.0-0 \
+    libglib2.0-0 \
+    libffi-dev \
+    shared-mime-info \
+    fontconfig \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
