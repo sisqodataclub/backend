@@ -651,3 +651,125 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         response = HttpResponse(pdf_file, content_type='application/pdf')
         response['Content-Disposition'] = f'attachment; filename="invoice_{invoice_data["invoice_number"]}.pdf"'
         return response
+
+    @action(detail=True, methods=['put', 'patch'], url_path='edit')
+    def edit_invoice(self, request, pk=None):
+        """
+        PUT /api/payments/invoices/{id}/edit/
+        PATCH /api/payments/invoices/{id}/edit/
+        Updates an existing invoice, its items, and its expense record.
+        """
+        from services.models import Service
+        from .serializers import InvoiceCreationRequestSerializer, InvoiceReadSerializer
+
+        Invoice = get_invoice_model()
+        ItemModel = get_item_model()
+        Expense = get_expense_model()
+
+        invoice = self.get_object()
+        serializer = InvoiceCreationRequestSerializer(data=request.data, partial=(request.method == 'PATCH'))
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=400)
+
+        data = serializer.validated_data
+
+        # --- Update basic invoice fields ---
+        # Build contacts JSON
+        contacts = {
+            "Contact Info": {
+                "email": data.get('customer_email', invoice.contacts.get('Contact Info', {}).get('email', '')),
+                "phone": data.get('customer_phone', invoice.contacts.get('Contact Info', {}).get('phone', '')),
+            }
+        }
+
+        # Fix notes: handle deletion (if key present, even if empty)
+        if 'notes' in data:
+            raw_notes = data['notes']
+            notes_json = [{"label": "Additional Notes", "content": raw_notes}] if raw_notes else []
+        else:
+            notes_json = invoice.notes
+
+        # Title uniqueness (if changed)
+        new_title = data.get('title', invoice.title)
+        if new_title != invoice.title and Invoice.objects.filter(title=new_title).exists():
+            new_title = f"{new_title}-{uuid.uuid4().hex[:4]}"
+
+        invoice.title = new_title
+        invoice.invoice_date = data.get('issue_date', invoice.invoice_date)
+        invoice.due_date = data.get('due_date', invoice.due_date)
+        invoice.status = data.get('status', invoice.status)
+        invoice.receipt = data.get('receipt', invoice.receipt)
+        invoice.currency = data.get('currency', invoice.currency)
+        invoice.notes = notes_json
+        invoice.template_choice = data.get('template_choice', invoice.template_choice)
+        invoice.customer_name = data.get('customer_name', invoice.customer_name)
+        invoice.contacts = contacts
+        invoice.save()
+
+        # Update category (optional)
+        if 'category' in data:
+            Category = get_category_model()
+            if data['category']:
+                invoice.category = Category.objects.get(id=data['category'])
+            else:
+                invoice.category = None
+            invoice.save()
+
+        # --- Replace items: delete all and recreate ---
+        invoice.items.all().delete()
+        subtotal = Decimal('0.00')
+        for item_data in data.get('items', []):
+            service_id = item_data.get('service_id')
+            if service_id:
+                service = Service.objects.get(id=service_id)
+                if service.price_fixed is not None:
+                    unit_price = Decimal(str(service.price_fixed))
+                elif service.price_per_hour is not None:
+                    hours = Decimal(str(service.duration_minutes)) / Decimal('60')
+                    unit_price = Decimal(str(service.price_per_hour)) * hours
+                else:
+                    unit_price = Decimal('0.00')
+                description = service.name
+            else:
+                unit_price = Decimal(str(item_data.get('unit_price', 0)))
+                description = item_data.get('description', '')
+
+            quantity = Decimal(str(item_data.get('quantity', 1)))
+            tax_rate = Decimal(str(item_data.get('tax_rate', 0)))
+            discount = Decimal(str(item_data.get('discount', 0)))
+            measurement = item_data.get('measurement', '')
+
+            line_total = quantity * unit_price * (1 + tax_rate/100) * (1 - discount/100)
+            subtotal += line_total
+
+            ItemModel.objects.create(
+                invoice=invoice,
+                description=description,
+                quantity=int(quantity),
+                unit_price=unit_price,
+                measurement=measurement,
+            )
+
+        # --- Update Expense (always overwrite with new calculations) ---
+        tax_pct = Decimal(str(data.get('tax_percentage', 0)))
+        discount_pct = Decimal(str(data.get('discount_percentage', 0)))
+        concession_pct = Decimal(str(data.get('concession_percentage', 0)))
+
+        tax_amount = subtotal * (tax_pct / 100)
+        discount_amount = subtotal * (discount_pct / 100)
+        concession_amount = subtotal * (concession_pct / 100)
+        total_amount = subtotal + tax_amount - discount_amount - concession_amount
+
+        expense, created = Expense.objects.get_or_create(invoice=invoice)
+        expense.subtotal = subtotal
+        expense.tax_percentage = tax_pct
+        expense.discount_percentage = discount_pct
+        expense.concession_percentage = concession_pct
+        expense.tax_amount = tax_amount
+        expense.discount_amount = discount_amount
+        expense.concession_amount = concession_amount
+        expense.total_amount = total_amount
+        expense.save()
+
+        out_serializer = InvoiceReadSerializer(invoice)
+        return Response(out_serializer.data, status=200)
