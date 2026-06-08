@@ -1,26 +1,285 @@
 <!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"><title>Invoice {{ invoice.invoice_number }}</title>
-<style>
-body { font-family: sans-serif; margin: 40px; }
-table { width:100%; border-collapse: collapse; margin-top:20px; }
-th, td { border:1px solid #ddd; padding:8px; text-align:left; }
-th { background:#f2f2f2; }
-.total { margin-top:20px; font-weight:bold; }
-</style>
+<head>
+    <meta charset="utf-8">
+    <title>Invoice {{ invoice.invoice_number }}</title>
+    <style>
+        @page {
+            size: A4;
+            margin: 2cm;
+        }
+        body {
+            font-family: 'Helvetica Neue', 'Helvetica', 'Arial', sans-serif;
+            font-size: 13px;
+            color: #334155; /* Slate 700 */
+            line-height: 1.5;
+        }
+        
+        /* --- Structural Grid (WeasyPrint Safe) --- */
+        .grid-table {
+            width: 100%;
+            border-collapse: collapse;
+            border: none;
+            margin-bottom: 40px;
+        }
+        .grid-table td {
+            border: none;
+            padding: 0;
+            vertical-align: top;
+        }
+
+        /* --- Header Section --- */
+        .invoice-title {
+            font-size: 32px;
+            font-weight: 700;
+            color: #0f172a; /* Slate 900 */
+            letter-spacing: 1px;
+            margin: 0 0 5px 0;
+        }
+        .invoice-subtitle {
+            font-size: 14px;
+            color: #64748b; /* Slate 500 */
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .meta-box {
+            text-align: right;
+        }
+        .meta-box table {
+            width: auto;
+            float: right;
+            border-collapse: collapse;
+        }
+        .meta-box td {
+            padding: 4px 0 4px 15px;
+            border: none;
+            text-align: right;
+        }
+        .meta-label {
+            color: #64748b;
+            font-weight: 600;
+        }
+        .status-badge {
+            display: inline-block;
+            background-color: #f1f5f9;
+            color: #334155;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: bold;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 1px;
+        }
+
+        /* --- Bill To Section --- */
+        .bill-to-wrapper {
+            background-color: #f8fafc; /* Slate 50 */
+            border-left: 3px solid #cbd5e1; /* Slate 300 */
+            padding: 15px 20px;
+            margin-bottom: 40px;
+            width: 50%;
+            border-radius: 0 4px 4px 0;
+        }
+        .bill-to-label {
+            font-size: 11px;
+            font-weight: 700;
+            color: #94a3b8;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+        .customer-name {
+            font-size: 16px;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 4px;
+        }
+
+        /* --- Items Table --- */
+        .items-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+        }
+        .items-table th {
+            background-color: #ffffff;
+            color: #64748b;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+            padding: 12px 8px;
+            border-bottom: 2px solid #cbd5e1;
+            text-align: left;
+        }
+        .items-table td {
+            padding: 16px 8px;
+            border-bottom: 1px solid #e2e8f0; /* Slate 200 */
+            color: #1e293b;
+        }
+        .amount-col {
+            text-align: right !important;
+        }
+
+        /* --- Totals Section --- */
+        .totals-wrapper {
+            width: 45%;
+            float: right;
+        }
+        .totals-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .totals-table td {
+            padding: 8px 0;
+            border: none;
+        }
+        .totals-label {
+            color: #64748b;
+        }
+        .totals-value {
+            text-align: right;
+            font-weight: 500;
+            color: #0f172a;
+        }
+        .grand-total-row td {
+            border-top: 2px solid #cbd5e1;
+            padding-top: 12px;
+            margin-top: 4px;
+        }
+        .grand-total-label {
+            font-size: 14px;
+            font-weight: 700;
+            color: #0f172a;
+        }
+        .grand-total-value {
+            font-size: 18px;
+            font-weight: 700;
+            color: #0f172a;
+            text-align: right;
+        }
+
+        /* --- Utilities --- */
+        .clearfix::after {
+            content: "";
+            clear: both;
+            display: table;
+        }
+        .footer {
+            margin-top: 80px;
+            text-align: center;
+            font-size: 11px;
+            color: #94a3b8;
+            border-top: 1px solid #e2e8f0;
+            padding-top: 20px;
+        }
+    </style>
 </head>
 <body>
-<h1>Invoice #{{ invoice.invoice_number }}</h1>
-<p><strong>Customer:</strong> {{ invoice.customer.name }} ({{ invoice.customer.email }})</p>
-<p><strong>Issue Date:</strong> {{ invoice.issue_date|date:"Y-m-d" }}</p>
-<p><strong>Due Date:</strong> {{ invoice.due_date|date:"Y-m-d" }}</p>
-<p><strong>Status:</strong> {{ invoice.get_status_display }}</p>
-<table>
-    <thead><tr><th>Description</th><th>Qty</th><th>Unit Price</th><th>Tax</th><th>Total</th></tr></thead>
-    <tbody>{% for item in invoice.invoiceitem_set.all %}
-    <tr><td>{{ item.description }}</td><td>{{ item.quantity }}</td><td>{{ item.unit_price }}</td><td>{{ item.tax_rate }}%</td><td>{{ item.total }}</td></tr>{% endfor %}
-    </tbody>
-</table>
-<p class="total">Total Amount: {{ invoice.total_amount }}</p>
+
+    <table class="grid-table">
+        <tr>
+            <td style="width: 50%;">
+                <div class="invoice-title">INVOICE</div>
+                <div class="invoice-subtitle">{{ invoice.title|default:"Billing Statement" }}</div>
+            </td>
+            <td style="width: 50%;" class="meta-box">
+                <table>
+                    <tr>
+                        <td class="meta-label">Invoice #:</td>
+                        <td><strong>{{ invoice.invoice_number }}</strong></td>
+                    </tr>
+                    <tr>
+                        <td class="meta-label">Date Issued:</td>
+                        <td>{{ invoice.invoice_date }}</td>
+                    </tr>
+                    <tr>
+                        <td class="meta-label">Due Date:</td>
+                        <td>{{ invoice.due_date }}</td>
+                    </tr>
+                    <tr>
+                        <td class="meta-label">Status:</td>
+                        <td><span class="status-badge">{{ invoice.status }}</span></td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+
+    <div class="bill-to-wrapper">
+        <div class="bill-to-label">Billed To</div>
+        <div class="customer-name">{{ customer_name }}</div>
+        <div>{{ customer_email }}</div>
+        <div>{{ customer_phone }}</div>
+    </div>
+
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th>Description</th>
+                <th style="width: 8%; text-align: center;">Qty</th>
+                <th style="width: 12%;">Unit</th>
+                <th style="width: 18%;" class="amount-col">Unit Price</th>
+                <th style="width: 20%;" class="amount-col">Total</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in items %}
+            <tr>
+                <td><strong>{{ item.description }}</strong></td>
+                <td style="text-align: center;">{{ item.quantity }}</td>
+                <td>{{ item.measurement|default:"-" }}</td>
+                <td class="amount-col">{{ invoice.currency|default:"$" }} {{ item.unit_price }}</td>
+                <td class="amount-col">{{ invoice.currency|default:"$" }} {{ item.total_price }}</td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="5" style="text-align: center; color: #94a3b8; padding: 30px;">No items attached to this invoice.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <div class="clearfix">
+        <div class="totals-wrapper">
+            <table class="totals-table">
+                <tr>
+                    <td class="totals-label">Subtotal</td>
+                    <td class="totals-value">{{ invoice.currency|default:"$" }} {{ expense.subtotal }}</td>
+                </tr>
+                
+                {% if expense.tax_amount > 0 %}
+                <tr>
+                    <td class="totals-label">Tax ({{ expense.tax_percentage }}%)</td>
+                    <td class="totals-value">{{ invoice.currency|default:"$" }} {{ expense.tax_amount }}</td>
+                </tr>
+                {% endif %}
+                
+                {% if expense.discount_amount > 0 %}
+                <tr>
+                    <td class="totals-label">Discount ({{ expense.discount_percentage }}%)</td>
+                    <td class="totals-value">- {{ invoice.currency|default:"$" }} {{ expense.discount_amount }}</td>
+                </tr>
+                {% endif %}
+                
+                {% if expense.concession_amount > 0 %}
+                <tr>
+                    <td class="totals-label">Concession ({{ expense.concession_percentage }}%)</td>
+                    <td class="totals-value">- {{ invoice.currency|default:"$" }} {{ expense.concession_amount }}</td>
+                </tr>
+                {% endif %}
+
+                <tr class="grand-total-row">
+                    <td class="grand-total-label">Total Amount</td>
+                    <td class="grand-total-value">{{ invoice.currency|default:"$" }} {{ expense.total_amount }}</td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <div class="footer">
+        Thank you for your business! If you have any questions concerning this invoice, please contact us.
+    </div>
+
 </body>
 </html>

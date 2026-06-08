@@ -614,22 +614,40 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 return Response(out_serializer.data, status=201)
 
         except Exception as e:
-            # Any other error (database, validation, etc.) returns 400
             return Response({'error': str(e)}, status=400)
 
     @action(detail=True, methods=['get'], url_path='pdf')
     def download_pdf(self, request, pk=None):
+        from .serializers import InvoiceReadSerializer
         from django.template.loader import render_to_string
         from weasyprint import HTML
 
         invoice = self.get_object()
-        try:
-            pdf = invoice.generate_pdf()
-            response = HttpResponse(pdf, content_type='application/pdf')
-        except AttributeError:
-            html_string = render_to_string('invoice_pdf.html', {'invoice': invoice})
-            html = HTML(string=html_string)
-            pdf = html.write_pdf()
-            response = HttpResponse(pdf, content_type='application/pdf')
-        response['Content-Disposition'] = f'attachment; filename="invoice_{invoice.id}.pdf"'
+        # Serialize the invoice to get full data (items, expense, contacts)
+        serializer = InvoiceReadSerializer(invoice)
+        invoice_data = serializer.data
+
+        # Extract contact info safely
+        contacts = invoice_data.get('contacts', {})
+        if isinstance(contacts, dict):
+            contact_info = contacts.get('Contact Info', {})
+            customer_email = contact_info.get('email', '')
+            customer_phone = contact_info.get('phone', '')
+        else:
+            customer_email = ''
+            customer_phone = ''
+
+        context = {
+            'invoice': invoice_data,
+            'customer_name': invoice_data.get('customer_name', ''),
+            'customer_email': customer_email,
+            'customer_phone': customer_phone,
+            'items': invoice_data.get('items', []),
+            'expense': invoice_data.get('expense', {}),
+        }
+
+        html_string = render_to_string('invoice_pdf.html', context)
+        pdf_file = HTML(string=html_string).write_pdf()
+        response = HttpResponse(pdf_file, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="invoice_{invoice_data["invoice_number"]}.pdf"'
         return response
