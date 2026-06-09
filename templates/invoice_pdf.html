@@ -15,7 +15,6 @@
             line-height: 1.5;
         }
 
-        /* --- Structural Grid (WeasyPrint Safe) --- */
         .grid-table {
             width: 100%;
             border-collapse: collapse;
@@ -28,11 +27,10 @@
             vertical-align: top;
         }
 
-        /* --- Header Section --- */
         .company-name {
             font-size: 24px;
             font-weight: 800;
-            color: #2563eb; /* Professional Blue */
+            color: #2563eb;
             margin-bottom: 4px;
             letter-spacing: 0.5px;
         }
@@ -44,13 +42,13 @@
         .invoice-title {
             font-size: 32px;
             font-weight: 700;
-            color: #0f172a; /* Slate 900 */
+            color: #0f172a;
             letter-spacing: 1px;
             margin: 0 0 5px 0;
         }
         .invoice-subtitle {
             font-size: 14px;
-            color: #64748b; /* Slate 500 */
+            color: #64748b;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
@@ -83,10 +81,9 @@
             letter-spacing: 1px;
         }
 
-        /* --- Bill To Section --- */
         .bill-to-wrapper {
-            background-color: #f8fafc; /* Slate 50 */
-            border-left: 3px solid #cbd5e1; /* Slate 300 */
+            background-color: #f8fafc;
+            border-left: 3px solid #cbd5e1;
             padding: 15px 20px;
             margin-bottom: 40px;
             width: 50%;
@@ -107,7 +104,6 @@
             margin-bottom: 4px;
         }
 
-        /* --- Items Table --- */
         .items-table {
             width: 100%;
             border-collapse: collapse;
@@ -126,14 +122,13 @@
         }
         .items-table td {
             padding: 16px 8px;
-            border-bottom: 1px solid #e2e8f0; /* Slate 200 */
+            border-bottom: 1px solid #e2e8f0;
             color: #1e293b;
         }
         .amount-col {
             text-align: right !important;
         }
 
-        /* --- Totals Section --- */
         .totals-wrapper {
             width: 45%;
             float: right;
@@ -171,7 +166,6 @@
             text-align: right;
         }
 
-        /* --- Utilities --- */
         .clearfix::after {
             content: "";
             clear: both;
@@ -192,13 +186,11 @@
     <table class="grid-table">
         <tr>
             <td style="width: 50%;">
-                <!-- Added Company Branding Here -->
                 <div class="company-name">Ddeep Cleaning Service</div>
                 <div class="company-details">
-                    contact@ddeepcleaning.com<br>
-                    <!-- Add phone or address here if needed -->
+                    clean@ddeepcleaning.com<br>
                 </div>
-                
+
                 <div class="invoice-title">INVOICE</div>
                 <div class="invoice-subtitle">{{ invoice.title|default:"Billing Statement" }}</div>
             </td>
@@ -218,7 +210,15 @@
                     </tr>
                     <tr>
                         <td class="meta-label">Status:</td>
-                        <td><span class="status-badge">{{ invoice.status }}</span></td>
+                        <td>
+                            <span class="status-badge">
+                                {% if invoice.status == 'paid' %}
+                                    PAID
+                                {% else %}
+                                    UNPAID
+                                {% endif %}
+                            </span>
+                        </td>
                     </tr>
                 </table>
             </td>
@@ -266,28 +266,24 @@
                     <td class="totals-label">Subtotal</td>
                     <td class="totals-value">{{ invoice.currency|default:"$" }} {{ expense.subtotal }}</td>
                 </tr>
-
                 {% if expense.tax_amount > 0 %}
                 <tr>
                     <td class="totals-label">Tax ({{ expense.tax_percentage }}%)</td>
                     <td class="totals-value">{{ invoice.currency|default:"$" }} {{ expense.tax_amount }}</td>
                 </tr>
                 {% endif %}
-
                 {% if expense.discount_amount > 0 %}
                 <tr>
                     <td class="totals-label">Discount ({{ expense.discount_percentage }}%)</td>
                     <td class="totals-value">- {{ invoice.currency|default:"$" }} {{ expense.discount_amount }}</td>
                 </tr>
                 {% endif %}
-
                 {% if expense.concession_amount > 0 %}
                 <tr>
                     <td class="totals-label">Concession ({{ expense.concession_percentage }}%)</td>
                     <td class="totals-value">- {{ invoice.currency|default:"$" }} {{ expense.concession_amount }}</td>
                 </tr>
                 {% endif %}
-
                 <tr class="grand-total-row">
                     <td class="grand-total-label">Total Amount</td>
                     <td class="grand-total-value">{{ invoice.currency|default:"$" }} {{ expense.total_amount }}</td>
