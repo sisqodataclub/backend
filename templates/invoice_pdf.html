@@ -14,7 +14,7 @@
             color: #334155; /* Slate 700 */
             line-height: 1.5;
         }
-        
+
         /* --- Structural Grid (WeasyPrint Safe) --- */
         .grid-table {
             width: 100%;
@@ -29,6 +29,18 @@
         }
 
         /* --- Header Section --- */
+        .company-name {
+            font-size: 24px;
+            font-weight: 800;
+            color: #2563eb; /* Professional Blue */
+            margin-bottom: 4px;
+            letter-spacing: 0.5px;
+        }
+        .company-details {
+            font-size: 12px;
+            color: #64748b;
+            margin-bottom: 25px;
+        }
         .invoice-title {
             font-size: 32px;
             font-weight: 700;
@@ -180,6 +192,13 @@
     <table class="grid-table">
         <tr>
             <td style="width: 50%;">
+                <!-- Added Company Branding Here -->
+                <div class="company-name">Ddeep Cleaning Service</div>
+                <div class="company-details">
+                    contact@ddeepcleaning.com<br>
+                    <!-- Add phone or address here if needed -->
+                </div>
+                
                 <div class="invoice-title">INVOICE</div>
                 <div class="invoice-subtitle">{{ invoice.title|default:"Billing Statement" }}</div>
             </td>
@@ -247,21 +266,21 @@
                     <td class="totals-label">Subtotal</td>
                     <td class="totals-value">{{ invoice.currency|default:"$" }} {{ expense.subtotal }}</td>
                 </tr>
-                
+
                 {% if expense.tax_amount > 0 %}
                 <tr>
                     <td class="totals-label">Tax ({{ expense.tax_percentage }}%)</td>
                     <td class="totals-value">{{ invoice.currency|default:"$" }} {{ expense.tax_amount }}</td>
                 </tr>
                 {% endif %}
-                
+
                 {% if expense.discount_amount > 0 %}
                 <tr>
                     <td class="totals-label">Discount ({{ expense.discount_percentage }}%)</td>
                     <td class="totals-value">- {{ invoice.currency|default:"$" }} {{ expense.discount_amount }}</td>
                 </tr>
                 {% endif %}
-                
+
                 {% if expense.concession_amount > 0 %}
                 <tr>
                     <td class="totals-label">Concession ({{ expense.concession_percentage }}%)</td>
