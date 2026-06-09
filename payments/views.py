@@ -522,11 +522,12 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         return response
 
     # ------------------------------------------------------------------
-    # Email Invoice
+    # Email Invoice (HTML + plain text fallback)
     # ------------------------------------------------------------------
     @action(detail=True, methods=['post'], url_path='email')
     def email_invoice(self, request, pk=None):
-        from django.core.mail import EmailMessage
+        from django.core.mail import EmailMultiAlternatives
+        from django.template.loader import render_to_string
         from django.conf import settings
         import smtplib
         import logging
@@ -558,27 +559,42 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         currency = invoice.currency or 'USD'
 
         subject = f'Invoice {formatted_invoice_number}'
-        message = f"""Dear {customer_name},
 
-Please find attached your invoice.
+        # HTML email context
+        context = {
+            'customer_name': customer_name,
+            'invoice_number': formatted_invoice_number,
+            'invoice_date': invoice.invoice_date,
+            'due_date': invoice.due_date,
+            'total_amount': total_amount,
+            'currency': currency,
+            'company_name': 'Your Company Name',  # Customize
+        }
 
-Invoice Number: {formatted_invoice_number}
-Invoice Date: {invoice.invoice_date}
+        # Render HTML content
+        html_content = render_to_string('email_invoice.html', context)
+
+        # Plain text fallback (for spam filters and old email clients)
+        text_content = f"""Dear {customer_name},
+
+Please find attached your invoice ({formatted_invoice_number}).
+
+Total Amount Due: {currency} {total_amount}
 Due Date: {invoice.due_date}
-Total Amount: {total_amount} {currency}
 
-Thank you for your business.
+Thank you for your business!
 
 Best regards,
 Your Company Name
 """
 
-        email = EmailMessage(
+        email = EmailMultiAlternatives(
             subject=subject,
-            body=message.strip(),
+            body=text_content,
             from_email=settings.DEFAULT_FROM_EMAIL,
             to=[customer_email],
         )
+        email.attach_alternative(html_content, "text/html")
         email.attach(f'{formatted_invoice_number}.pdf', pdf_file, 'application/pdf')
 
         try:
