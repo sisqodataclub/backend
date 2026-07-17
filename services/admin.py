@@ -2,8 +2,9 @@
 from django.contrib import admin
 from .models import (
     Service, ServiceProvider, ServiceBooking, ServiceCategory,
-    BookingSnapshot, CleaningBooking, BlockedTime  # 👈 new models
+    BookingSnapshot, CleaningBooking, BlockedTime
 )
+
 
 # ==========================================
 # Service Category Admin
@@ -38,29 +39,70 @@ class ServiceProviderAdmin(admin.ModelAdmin):
 
 
 # ==========================================
-# Service Booking Admin (time‑slot based)
+# ENHANCED Service Booking Admin (with analytics fields)
 # ==========================================
 @admin.register(ServiceBooking)
 class ServiceBookingAdmin(admin.ModelAdmin):
-    list_display = ('id', 'service', 'tenant', 'customer_email', 'start_time', 'status', 'total_price')
-    list_filter = ('tenant', 'status', 'start_time')
-    search_fields = ('customer_email', 'customer_name', 'service__name')
-    readonly_fields = ('id', 'created_at', 'updated_at', 'stripe_payment_intent_id')
+    list_display = (
+        'id', 'customer_name', 'customer_email',
+        'service', 'start_time',
+        'payment_status', 'status',  # job status
+        'total_price', 'rating', 'has_complaint'
+    )
+    list_filter = (
+        'tenant', 'status', 'payment_status',
+        'has_complaint', 'complaint_resolved',
+        'rating', 'review_request_sent',
+        'utm_source', 'utm_medium',
+        'start_time', 'completed_at'
+    )
+    search_fields = (
+        'customer_name', 'customer_email', 'phone',
+        'service__name', 'internal_notes', 'complaint_notes'
+    )
+    readonly_fields = (
+        'id', 'created_at', 'updated_at',
+        'stripe_payment_intent_id',
+        'payment_reference', 'reschedule_history',
+        'rescheduled_count'
+    )
     fieldsets = (
-        ('Customer', {
-            'fields': ('customer_email', 'customer_name')
+        ('Customer Information', {
+            'fields': ('tenant', 'customer_name', 'customer_email', 'phone')
         }),
-        ('Service Details', {
+        ('Service & Provider', {
             'fields': ('service', 'provider', 'start_time', 'end_time')
         }),
-        ('Booking Info', {
-            'fields': ('status', 'total_price', 'stripe_payment_intent_id', 'customer_notes')
+        ('Job Status & Completion', {
+            'fields': ('status', 'completed_at', 'actual_duration_minutes', 'customer_notes')
         }),
-        ('Tenant & Timestamps', {
-            'fields': ('tenant', 'created_at', 'updated_at'),
+        ('Payment Details', {
+            'fields': ('payment_status', 'payment_date', 'payment_reference', 'total_price', 'discount_applied', 'tax_applied')
+        }),
+        ('Complaint Tracking', {
+            'fields': ('has_complaint', 'complaint_notes', 'complaint_resolved', 'complaint_resolved_at')
+        }),
+        ('Customer Feedback', {
+            'fields': ('rating', 'feedback_text', 'review_request_sent', 'review_requested_at')
+        }),
+        ('Rescheduling', {
+            'fields': ('reschedule_history', 'rescheduled_count')
+        }),
+        ('Marketing Attribution', {
+            'fields': ('utm_source', 'utm_medium', 'utm_campaign')
+        }),
+        ('Cancellation', {
+            'fields': ('cancellation_reason',)
+        }),
+        ('Internal Notes', {
+            'fields': ('internal_notes',)
+        }),
+        ('System Fields', {
+            'fields': ('id', 'created_at', 'updated_at', 'stripe_payment_intent_id'),
             'classes': ('collapse',)
         }),
     )
+    ordering = ('-start_time',)
 
 
 # ==========================================
@@ -88,7 +130,7 @@ class BookingSnapshotAdmin(admin.ModelAdmin):
 
 
 # ==========================================
-# NEW: Cleaning Booking Admin (old‑style cleaning orders)
+# Cleaning Booking Admin (old‑style cleaning orders)
 # ==========================================
 @admin.register(CleaningBooking)
 class CleaningBookingAdmin(admin.ModelAdmin):
@@ -117,10 +159,9 @@ class CleaningBookingAdmin(admin.ModelAdmin):
     )
 
 
-
-
-# (Your existing CleaningBooking admin code here...)
-
+# ==========================================
+# BlockedTime Admin
+# ==========================================
 @admin.register(BlockedTime)
 class BlockedTimeAdmin(admin.ModelAdmin):
     list_display = ('date', 'timeslot', 'reason')
