@@ -6,9 +6,6 @@ from .models import (
 )
 
 
-# ==========================================
-# Service Category Admin
-# ==========================================
 @admin.register(ServiceCategory)
 class ServiceCategoryAdmin(admin.ModelAdmin):
     list_display = ('name', 'tenant', 'display_order', 'is_active')
@@ -17,9 +14,6 @@ class ServiceCategoryAdmin(admin.ModelAdmin):
     ordering = ('tenant', 'display_order', 'name')
 
 
-# ==========================================
-# Service Admin
-# ==========================================
 @admin.register(Service)
 class ServiceAdmin(admin.ModelAdmin):
     list_display = ('name', 'category', 'tenant', 'price_fixed', 'price_per_hour', 'display_order', 'is_addon_only', 'is_active')
@@ -28,9 +22,6 @@ class ServiceAdmin(admin.ModelAdmin):
     ordering = ('tenant', 'category__display_order', 'display_order', 'name')
 
 
-# ==========================================
-# Service Provider Admin
-# ==========================================
 @admin.register(ServiceProvider)
 class ServiceProviderAdmin(admin.ModelAdmin):
     list_display = ('user', 'service', 'tenant', 'is_active')
@@ -38,15 +29,12 @@ class ServiceProviderAdmin(admin.ModelAdmin):
     search_fields = ('user__email', 'service__name')
 
 
-# ==========================================
-# ENHANCED Service Booking Admin (with analytics fields)
-# ==========================================
 @admin.register(ServiceBooking)
 class ServiceBookingAdmin(admin.ModelAdmin):
     list_display = (
         'id', 'customer_name', 'customer_email',
         'service', 'start_time',
-        'payment_status', 'status',  # job status
+        'payment_status', 'status',
         'total_price', 'rating', 'has_complaint'
     )
     list_filter = (
@@ -57,7 +45,7 @@ class ServiceBookingAdmin(admin.ModelAdmin):
         'start_time', 'completed_at'
     )
     search_fields = (
-        'customer_name', 'customer_email', 'phone',
+        'customer_name', 'customer_email',
         'service__name', 'internal_notes', 'complaint_notes'
     )
     readonly_fields = (
@@ -68,7 +56,7 @@ class ServiceBookingAdmin(admin.ModelAdmin):
     )
     fieldsets = (
         ('Customer Information', {
-            'fields': ('tenant', 'customer_name', 'customer_email', 'phone')
+            'fields': ('tenant', 'customer_name', 'customer_email')
         }),
         ('Service & Provider', {
             'fields': ('service', 'provider', 'start_time', 'end_time')
@@ -105,9 +93,6 @@ class ServiceBookingAdmin(admin.ModelAdmin):
     ordering = ('-start_time',)
 
 
-# ==========================================
-# NEW: Booking Snapshot Admin (auto‑save wizard data)
-# ==========================================
 @admin.register(BookingSnapshot)
 class BookingSnapshotAdmin(admin.ModelAdmin):
     list_display = ('session_id', 'tenant', 'is_final', 'created_at', 'updated_at')
@@ -129,9 +114,6 @@ class BookingSnapshotAdmin(admin.ModelAdmin):
     )
 
 
-# ==========================================
-# Cleaning Booking Admin (old‑style cleaning orders)
-# ==========================================
 @admin.register(CleaningBooking)
 class CleaningBookingAdmin(admin.ModelAdmin):
     list_display = ('session_id', 'customer_name', 'customer_email', 'total', 'payment_method', 'status', 'created_at')
@@ -159,9 +141,6 @@ class CleaningBookingAdmin(admin.ModelAdmin):
     )
 
 
-# ==========================================
-# BlockedTime Admin
-# ==========================================
 @admin.register(BlockedTime)
 class BlockedTimeAdmin(admin.ModelAdmin):
     list_display = ('date', 'timeslot', 'reason')
