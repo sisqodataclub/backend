@@ -7,7 +7,7 @@ from django.template.response import TemplateResponse
 from django.urls import path
 from django.utils import timezone
 from .models import (
-    ServiceCategory, Service, ServiceProvider, 
+    ServiceCategory, Service, ServiceProvider,
     CleaningBooking, ServiceBooking, BookingSnapshot, BlockedTime
 )
 
@@ -16,13 +16,13 @@ from .models import (
 # ==========================================
 class CreateServiceBookingForm(forms.Form):
     service = forms.ModelChoiceField(
-        queryset=Service.objects.all(), 
+        queryset=Service.objects.all(),
         required=True,
         help_text="Select the primary service to assign these bookings to."
     )
     provider = forms.ModelChoiceField(
-        queryset=ServiceProvider.objects.all(), 
-        required=False, 
+        queryset=ServiceProvider.objects.all(),
+        required=False,
         empty_label="Unassigned (Assign later)",
         help_text="Optional: Dispatch to a specific provider immediately."
     )
@@ -36,25 +36,47 @@ class CleaningBookingAdmin(admin.ModelAdmin):
     list_display = ('session_id', 'customer_name', 'customer_email', 'total', 'status', 'created_at')
     list_filter = ('status', 'payment_method')
     search_fields = ('customer_name', 'customer_email', 'session_id')
-    
+
     actions = ['create_service_booking_action']
 
     def create_service_booking_action(self, request, queryset):
-        """
-        Action dropdown: Redirects to our custom intermediate view
-        """
-        selected_ids = queryset.values_list('id', flat=True)
-        ids_string = ','.join(map(str, selected_ids))
+        # Filter out those that already have a service booking
+        already_converted = []
+        eligible = []
+        for cb in queryset:
+            if cb.service_bookings.exists():
+                already_converted.append(cb.id)
+            else:
+                eligible.append(cb)
+
+        if not eligible:
+            self.message_user(
+                request,
+                "All selected cleaning bookings have already been promoted to Service Bookings.",
+                level='warning'
+            )
+            return redirect('admin:services_cleaningbooking_changelist')
+
+        # Prepare IDs for the intermediate view
+        ids_string = ','.join(map(str, [cb.id for cb in eligible]))
+        
+        if already_converted:
+            self.message_user(
+                request,
+                f"Skipped {len(already_converted)} cleaning booking(s) that were already converted. Proceeding with {len(eligible)}.",
+                level='warning'
+            )
+        
         return redirect('admin:create_service_booking_from_cleaning', ids=ids_string)
-    
+
     create_service_booking_action.short_description = "Promote to Service Booking(s)"
 
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
             path(
-                'create-service-booking/<str:ids>/', 
-                self.admin_site.admin_view(self.create_service_booking_view), 
+                'create-service-booking/<str:ids>/',
+                self.admin_site.admin_view(self.create_service_booking_view),
                 name='create_service_booking_from_cleaning'
             ),
         ]
@@ -68,55 +90,58 @@ class CleaningBookingAdmin(admin.ModelAdmin):
             self.message_user(request, "No valid cleaning bookings found.", level='error')
             return redirect('admin:services_cleaningbooking_changelist')
 
+        # Additional safety: filter out any that might have been converted in the meantime
+        eligible = [cb for cb in cleaning_bookings if not cb.service_bookings.exists()]
+        if not eligible:
+            self.message_user(request, "All selected cleaning bookings have already been converted.", level='warning')
+            return redirect('admin:services_cleaningbooking_changelist')
+
         if request.method == 'POST':
             form = CreateServiceBookingForm(request.POST)
             if form.is_valid():
                 service = form.cleaned_data['service']
                 provider = form.cleaned_data['provider']
-                
+
                 created_count = 0
-                for cb in cleaning_bookings:
-                    # 1. Parse the JSON datetime from the wizard
+                for cb in eligible:
+                    # Parse datetime from selected_datetime JSON
                     start_dt = timezone.now()
                     end_dt = timezone.now() + datetime.timedelta(minutes=service.duration_minutes)
-                    
+
                     if isinstance(cb.selected_datetime, dict):
                         booking_date = cb.selected_datetime.get('booking_date')
                         timeslot = cb.selected_datetime.get('timeslot')
-                        
                         if booking_date and timeslot:
                             try:
                                 date_obj = datetime.datetime.strptime(booking_date, '%Y-%m-%d').date()
                                 start_str = timeslot.split(' - ')[0].strip()
                                 start_time_obj = datetime.datetime.strptime(start_str, '%H:%M').time()
-                                
                                 start_dt = timezone.make_aware(datetime.datetime.combine(date_obj, start_time_obj))
                                 end_dt = start_dt + datetime.timedelta(minutes=service.duration_minutes)
                             except Exception:
-                                pass  # fallback to default
+                                pass
 
-                    # 2. Determine payment status based on wizard data
-                    # (adjust according to your actual statuses)
+                    # Map payment status
                     mapped_payment_status = 'unpaid'
                     if cb.status == 'paid':
                         mapped_payment_status = 'paid_card' if cb.payment_method == 'stripe' else 'paid_cash'
 
-                    # 3. Create the ServiceBooking with auto-filled data
+                    # Create ServiceBooking
                     ServiceBooking.objects.create(
                         tenant=cb.tenant,
-                        cleaning_booking=cb,  # Link back to the raw wizard data
+                        cleaning_booking=cb,
                         service=service,
                         provider=provider,
                         customer_name=cb.customer_name,
                         customer_email=cb.customer_email,
-                        # Phone field – uncomment if you add a `phone` field to ServiceBooking
-                        # phone=cb.phone,
+                        phone=cb.phone,
+                        property_details=cb.property_details,
+                        selected_datetime=cb.selected_datetime,
                         total_price=cb.total,
                         start_time=start_dt,
                         end_time=end_dt,
                         payment_status=mapped_payment_status,
-                        status='confirmed',  # Auto-confirm upon promotion
-                        # The remaining fields (rating, complaints, UTMs) stay blank per your request
+                        status='confirmed',
                     )
                     created_count += 1
 
@@ -128,7 +153,7 @@ class CleaningBookingAdmin(admin.ModelAdmin):
         context = dict(
             self.admin_site.each_context(request),
             title="Promote to Service Booking",
-            cleaning_bookings=cleaning_bookings,
+            cleaning_bookings=eligible,  # Only show eligible bookings
             form=form,
         )
         return TemplateResponse(request, 'admin/cleaning_booking_create_service.html', context)
@@ -140,13 +165,13 @@ class CleaningBookingAdmin(admin.ModelAdmin):
 @admin.register(ServiceBooking)
 class ServiceBookingAdmin(admin.ModelAdmin):
     list_display = (
-        'id', 'customer_name', 'customer_email', 'service', 
-        'start_time', 'payment_status', 'status', 'total_price'
+        'id', 'customer_name', 'customer_email', 'phone',
+        'service', 'start_time', 'payment_status', 'status', 'total_price'
     )
     list_filter = ('tenant', 'status', 'payment_status', 'has_complaint', 'rating')
     search_fields = ('customer_name', 'customer_email', 'service__name', 'internal_notes')
     readonly_fields = (
-        'cleaning_booking', 'created_at', 'updated_at', 
+        'cleaning_booking', 'created_at', 'updated_at',
         'stripe_payment_intent_id', 'payment_reference',
         'reschedule_history', 'rescheduled_count'
     )
@@ -155,7 +180,11 @@ class ServiceBookingAdmin(admin.ModelAdmin):
             'fields': ('cleaning_booking',)
         }),
         ('Customer Information', {
-            'fields': ('customer_name', 'customer_email')
+            'fields': ('customer_name', 'customer_email', 'phone')
+        }),
+        ('Property & Datetime', {
+            'fields': ('property_details', 'selected_datetime'),
+            'classes': ('collapse',)
         }),
         ('Service & Provider', {
             'fields': ('service', 'provider', 'start_time', 'end_time')
@@ -185,7 +214,7 @@ class ServiceBookingAdmin(admin.ModelAdmin):
             'fields': ('internal_notes',)
         }),
         ('System Fields', {
-            'fields': ('id', 'created_at', 'updated_at', 'stripe_payment_intent_id'),
+            'fields': ('created_at', 'updated_at', 'stripe_payment_intent_id'),
             'classes': ('collapse',)
         }),
     )
