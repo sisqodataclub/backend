@@ -7,7 +7,7 @@ from .views import (
     ServiceCategoryViewSet,
     BookingSnapshotViewSet,
     CleaningBookingViewSet,
-    ServiceBookingAnalyticsView,   # ✅ NEW analytics view
+    ServiceBookingAnalyticsView,
     get_blocked_times,
 )
 
@@ -19,14 +19,13 @@ router.register(r'booking-snapshots', BookingSnapshotViewSet, basename='booking-
 router.register(r'cleaning-bookings', CleaningBookingViewSet, basename='cleaning-booking')
 
 urlpatterns = [
-    path('', include(router.urls)),
-
-    # Aliases for old endpoints (so frontend works without changes)
+    # 1. EXPLICIT PATHS FIRST: These must be evaluated before the router
+    path('service-bookings/analytics/', ServiceBookingAnalyticsView.as_view(), name='service-booking-analytics'),
+    
+    # Aliases for old endpoints
     path('bookings/', CleaningBookingViewSet.as_view({'post': 'create'}), name='old-booking-alias'),
-
-    # Blocked times endpoint
     path('blocked-times/', get_blocked_times, name='blocked-times'),
 
-    # ✅ NEW: Analytics endpoint for the dashboard
-    path('service-bookings/analytics/', ServiceBookingAnalyticsView.as_view(), name='service-booking-analytics'),
+    # 2. ROUTER LAST: Catches everything else (list, create, detail view lookups)
+    path('', include(router.urls)),
 ]
