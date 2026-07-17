@@ -290,8 +290,8 @@ class ServiceBookingAnalyticsView(generics.ListAPIView):
         'review_request_sent',
         'utm_source',
         'utm_medium',
-        'completed_at__date',
-        'payment_date__date',
+       # 'completed_at__date',
+       # 'payment_date__date',
     ]
     search_fields = ['customer_name', 'customer_email', 'service__name', 'complaint_notes', 'internal_notes']
     ordering_fields = ['created_at', 'total_price', 'customer_name', 'completed_at', 'payment_date']
