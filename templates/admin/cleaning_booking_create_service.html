@@ -1,0 +1,40 @@
+{% extends "admin/base_site.html" %}
+{% load i18n admin_urls %}
+
+{% block content %}
+<div id="content-main">
+    <div style="margin-bottom: 20px;">
+        <h2>Promote Raw Bookings to Service Calendar</h2>
+        <p>You are about to generate official Service Bookings for the following raw wizard entries. The customer data, total price, and selected timeslot will be automatically extracted.</p>
+        
+        <ul style="margin: 15px 0 25px 20px; line-height: 1.6;">
+            {% for cb in cleaning_bookings %}
+            <li><strong>{{ cb.customer_name }}</strong> ({{ cb.customer_email }}) - £{{ cb.total }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+
+    <form method="post">
+        {% csrf_token %}
+        <fieldset class="module aligned">
+            <h2>Assign Service Parameters</h2>
+            {% for field in form %}
+                <div class="form-row">
+                    <div>
+                        {{ field.label_tag }}
+                        {{ field }}
+                        {% if field.help_text %}
+                            <div class="help">{{ field.help_text }}</div>
+                        {% endif %}
+                    </div>
+                </div>
+            {% endfor %}
+        </fieldset>
+        
+        <div class="submit-row">
+            <input type="submit" value="Promote to Service Bookings" class="default" style="float: right;">
+            <a href="{% url 'admin:services_cleaningbooking_changelist' %}" class="button cancel-link" style="padding: 10px 15px; text-decoration: none;">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}
