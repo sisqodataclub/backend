@@ -1,54 +1,63 @@
+# services/views.py
 import logging
+import stripe
 from datetime import datetime, timedelta
-from rest_framework.viewsets import ModelViewSet
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework import permissions
+from decimal import Decimal
+
+from django.conf import settings
+from django.core.mail import send_mail
 from django.shortcuts import get_object_or_404
+from django.template.loader import render_to_string
 from django.utils import timezone
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from django.utils.html import strip_tags
 
+from rest_framework import generics, permissions, filters, status
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.response import Response
+from rest_framework.viewsets import ModelViewSet
+from rest_framework.permissions import AllowAny, IsAuthenticated, IsAuthenticatedOrReadOnly
 
+from django_filters.rest_framework import DjangoFilterBackend
+
+# --- Models ---
 from .models import (
-       Service,
-       ServiceBooking,
-       ServiceProvider,
-       ServiceCategory,
-       BookingSnapshot,    # 👈 Added
-       CleaningBooking,
-       BlockedTime     # 👈 Added
-   )
+    Service,
+    ServiceBooking,
+    ServiceProvider,
+    ServiceCategory,
+    BookingSnapshot,
+    CleaningBooking,
+    BlockedTime,
+)
 
-
-
+# --- Serializers ---
 from .serializers import (
     ServiceSerializer,
     ServiceBookingSerializer,
     CreateServiceBookingSerializer,
     AvailableSlotSerializer,
     ServiceCategorySerializer,
-    BookingSnapshotSerializer,    # 👈 add this
-    CleaningBookingSerializer     # 👈 add this
+    BookingSnapshotSerializer,
+    CleaningBookingSerializer,
+    ServiceBookingAnalyticsSerializer,  # NEW
 )
 
-
-
+# --- Helpers ---
 from .availability import get_available_slots
 from payments.views import create_service_payment_intent
-from products.models import Discount   # ✅ Import Discount model for validation
+from products.models import Discount
 
 logger = logging.getLogger(__name__)
 
 
-# ==========================================
-# Category ViewSet
-# ==========================================
+# ============================================================
+# 1. CATEGORY VIEWSET
+# ============================================================
 class ServiceCategoryViewSet(ModelViewSet):
     """Allows frontend to fetch categories (e.g., for navigation tabs)"""
     queryset = ServiceCategory.objects.all()
     serializer_class = ServiceCategorySerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
         if not hasattr(self.request, 'tenant') or not self.request.tenant:
@@ -56,52 +65,38 @@ class ServiceCategoryViewSet(ModelViewSet):
         return self.queryset.filter(tenant_id=self.request.tenant.id, is_active=True)
 
 
-# ==========================================
-# Service ViewSet with category_name filter
-# ==========================================
+# ============================================================
+# 2. SERVICE VIEWSET
+# ============================================================
 class ServiceViewSet(ModelViewSet):
     queryset = Service.objects.all()
     serializer_class = ServiceSerializer
-    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    permission_classes = [IsAuthenticatedOrReadOnly]
 
     def get_queryset(self):
-        """Tenant‑filtered queryset with query params for category (ID or name) and add‑ons."""
         if not hasattr(self.request, 'tenant') or not self.request.tenant:
             logger.warning("ServiceViewSet accessed without tenant context")
             return Service.objects.none()
 
         queryset = self.queryset.filter(tenant_id=self.request.tenant.id, is_active=True)
 
-        # Filter by category ID (e.g. ?category=4)
+        # Filtering
         category_id = self.request.query_params.get('category')
         if category_id:
             queryset = queryset.filter(category_id=category_id)
 
-        # NEW: Filter by category name (case‑insensitive, e.g. ?category_name=cleaning_services)
         category_name = self.request.query_params.get('category_name')
         if category_name:
             queryset = queryset.filter(category__name__iexact=category_name)
 
-        # Filter out add‑on services unless explicitly requested
         include_addons = self.request.query_params.get('include_addons')
         if not include_addons or include_addons.lower() == 'false':
             queryset = queryset.filter(is_addon_only=False)
 
         return queryset
 
-    @action(detail=False, methods=['post'], permission_classes=[permissions.AllowAny])
+    @action(detail=False, methods=['post'], permission_classes=[AllowAny])
     def calculate_quote(self, request):
-        """
-        POST /api/services/calculate_quote/
-        Securely calculates the total price using database prices.
-        Request body:
-        {
-            "items": [{"service_id": 1, "quantity": 2}, ...],
-            "furnished_status": "furnished",   # optional
-            "biohazard": "yes-human",           # optional
-            "discount_code": "SAVE10"           # optional
-        }
-        """
         tenant = request.tenant
         if not tenant:
             return Response({"error": "Tenant not identified"}, status=400)
@@ -114,7 +109,6 @@ class ServiceViewSet(ModelViewSet):
         subtotal = 0.0
         breakdown = []
 
-        # 1. Validate each item and calculate subtotal
         for item in items:
             service_id = item.get('service_id')
             quantity = item.get('quantity', 1)
@@ -123,7 +117,6 @@ class ServiceViewSet(ModelViewSet):
             except Service.DoesNotExist:
                 return Response({"error": f"Service ID {service_id} not found"}, status=400)
 
-            # Determine unit price
             if service.price_fixed:
                 unit_price = float(service.price_fixed)
             elif service.price_per_hour:
@@ -141,7 +134,6 @@ class ServiceViewSet(ModelViewSet):
                 "total": round(line_total, 2)
             })
 
-        # 2. Fees
         fees = 0.0
         if furnished == "furnished":
             fees += 10.0
@@ -156,25 +148,16 @@ class ServiceViewSet(ModelViewSet):
             fees += 40.0
             breakdown.append({"name": "Biohazard (Blood)", "total": 40.0})
 
-        # 3. Discount validation
         discount_amount = 0.0
         if discount_code:
             try:
-                discount = Discount.objects.get(
-                    code__iexact=discount_code,
-                    tenant=tenant,
-                    is_active=True
-                )
-                # You may add additional checks: expiry, min purchase, remaining uses
-                # Here we use a simple flat discount for example
-                # Modify based on your Discount model method
+                discount = Discount.objects.get(code__iexact=discount_code, tenant=tenant, is_active=True)
                 discount_amount = discount.calculate_discount(subtotal + fees)
                 breakdown.append({"name": f"Discount ({discount.code})", "total": -discount_amount})
             except Discount.DoesNotExist:
                 return Response({"error": "Invalid discount code"}, status=400)
 
-        total = subtotal + fees - discount_amount
-        total = max(0.0, total)
+        total = max(0.0, subtotal + fees - discount_amount)
 
         return Response({
             "subtotal": round(subtotal, 2),
@@ -208,12 +191,12 @@ class ServiceViewSet(ModelViewSet):
         return Response(slots)
 
 
-# ==========================================
-# ServiceBooking ViewSet (unchanged)
-# ==========================================
+# ============================================================
+# 3. SERVICE BOOKING VIEWSET (Time-slot appointments)
+# ============================================================
 class ServiceBookingViewSet(ModelViewSet):
     serializer_class = ServiceBookingSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         if not hasattr(self.request, 'tenant') or not self.request.tenant:
@@ -238,12 +221,7 @@ class ServiceBookingViewSet(ModelViewSet):
         start = data['start_time']
         end = start + timedelta(minutes=service.duration_minutes)
 
-        slots = get_available_slots(
-            service.id,
-            start,
-            request.tenant.id,
-            data.get('provider_id')
-        )
+        slots = get_available_slots(service.id, start, request.tenant.id, data.get('provider_id'))
         if not any(slot['start'] == start for slot in slots):
             return Response({"error": "Slot no longer available"}, status=409)
 
@@ -293,22 +271,44 @@ class ServiceBookingViewSet(ModelViewSet):
         return Response({"status": "cancelled"})
 
 
+# ============================================================
+# 4. ANALYTICS VIEW (for the dashboard)
+# ============================================================
+class ServiceBookingAnalyticsView(generics.ListAPIView):
+    """
+    API endpoint for the analytics dashboard.
+    Returns all bookings with all analytical fields, filterable and searchable.
+    """
+    serializer_class = ServiceBookingAnalyticsSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = [
+        'payment_status',
+        'status',  # job status
+        'has_complaint',
+        'rating',
+        'review_request_sent',
+        'utm_source',
+        'utm_medium',
+        'completed_at__date',
+        'payment_date__date',
+    ]
+    search_fields = ['customer_name', 'customer_email', 'service__name', 'complaint_notes', 'internal_notes']
+    ordering_fields = ['created_at', 'total_price', 'customer_name', 'completed_at', 'payment_date']
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        tenant = self.request.tenant
+        if not tenant:
+            return ServiceBooking.objects.none()
+        return ServiceBooking.objects.filter(tenant=tenant).select_related('service', 'provider', 'cleaning_booking')
 
 
-# ==========================================
-# NEW: Secure Cleaning Booking ViewSet
-# ==========================================
-from django.conf import settings
-import stripe
-from django.core.mail import send_mail
-from django.template.loader import render_to_string
-from django.utils.html import strip_tags
-
-stripe.api_key = settings.STRIPE_SECRET_KEY
-
-
+# ============================================================
+# 5. BOOKING SNAPSHOT VIEWSET
+# ============================================================
 class BookingSnapshotViewSet(ModelViewSet):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [AllowAny]
     serializer_class = BookingSnapshotSerializer
 
     def get_queryset(self):
@@ -333,33 +333,12 @@ class BookingSnapshotViewSet(ModelViewSet):
         return Response({"status": "saved", "snapshot_id": snapshot.id}, status=200)
 
 
-
-
-# services/views.py – CleaningBookingViewSet (complete)
-
-# services/views.py – CleaningBookingViewSet (complete)
-# services/views.py – CleaningBookingViewSet (complete, with update support)
-
-
-# services/views.py – CleaningBookingViewSet (final, includes size variations)
-
-from rest_framework.viewsets import ModelViewSet
-from rest_framework import permissions
-from rest_framework.response import Response
-from .models import CleaningBooking, Service
-from .serializers import CleaningBookingSerializer
-import stripe
-from django.conf import settings
-from django.core.mail import send_mail
-from django.template.loader import render_to_string
-from django.utils.html import strip_tags
-import logging
-
-logger = logging.getLogger(__name__)
-
+# ============================================================
+# 6. CLEANING BOOKING VIEWSET (Wizard-style bookings)
+# ============================================================
 class CleaningBookingViewSet(ModelViewSet):
     serializer_class = CleaningBookingSerializer
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [AllowAny]
     queryset = CleaningBooking.objects.all()
 
     def get_queryset(self):
@@ -385,7 +364,6 @@ class CleaningBookingViewSet(ModelViewSet):
         if frontend_total is None or frontend_total <= 0:
             return Response({"error": "Invalid total amount"}, status=400)
 
-        # Stripe payment link (if card)
         payment_link = ""
         if data.get('payment_method') == 'card':
             try:
@@ -423,17 +401,11 @@ class CleaningBookingViewSet(ModelViewSet):
             payment_method=data.get('payment_method', 'unknown'),
             total=frontend_total,
             paymentlink=payment_link,
-            property_details={
-                'address': data.get('address', ''),
-                'postcode': data.get('postcode', ''),
-            },
-            selected_datetime={
-                'booking_date': data.get('booking_date', ''),
-                'timeslot': data.get('timeslot', ''),
-            },
+            property_details={'address': data.get('address', ''), 'postcode': data.get('postcode', '')},
+            selected_datetime={'booking_date': data.get('booking_date', ''), 'timeslot': data.get('timeslot', '')},
         )
 
-        # Send quote summary email (unchanged)
+        # Send quote summary email
         try:
             item_names = {}
             items_breakdown = data.get('items_breakdown', [])
@@ -453,19 +425,31 @@ class CleaningBookingViewSet(ModelViewSet):
                         pass
 
             item_names["---"] = "---"
-            if booking.customer_name: item_names["Name"] = booking.customer_name
-            if booking.customer_email: item_names["Email"] = booking.customer_email
-            if booking.phone: item_names["Phone"] = booking.phone
-            if booking.furnished_status: item_names["Furnished Status"] = booking.furnished_status.title()
-            if booking.parking: item_names["Parking"] = booking.parking.title()
-            if booking.biohazard: item_names["Biohazard"] = booking.biohazard.title()
-            if booking.payment_method: item_names["Payment Method"] = booking.payment_method.title()
+            if booking.customer_name:
+                item_names["Name"] = booking.customer_name
+            if booking.customer_email:
+                item_names["Email"] = booking.customer_email
+            if booking.phone:
+                item_names["Phone"] = booking.phone
+            if booking.furnished_status:
+                item_names["Furnished Status"] = booking.furnished_status.title()
+            if booking.parking:
+                item_names["Parking"] = booking.parking.title()
+            if booking.biohazard:
+                item_names["Biohazard"] = booking.biohazard.title()
+            if booking.payment_method:
+                item_names["Payment Method"] = booking.payment_method.title()
+
             booking_date = booking.selected_datetime.get('booking_date')
             timeslot = booking.selected_datetime.get('timeslot')
-            if booking_date: item_names["Booking Date"] = booking_date
-            if timeslot: item_names["Timeslot"] = timeslot
-            if booking.property_details.get('address'): item_names["Address"] = booking.property_details['address']
-            if booking.property_details.get('postcode'): item_names["Postcode"] = booking.property_details['postcode']
+            if booking_date:
+                item_names["Booking Date"] = booking_date
+            if timeslot:
+                item_names["Timeslot"] = timeslot
+            if booking.property_details.get('address'):
+                item_names["Address"] = booking.property_details['address']
+            if booking.property_details.get('postcode'):
+                item_names["Postcode"] = booking.property_details['postcode']
 
             plain_text_items = "\n".join([f"- {k}: {v}" for k, v in item_names.items() if k != "---"])
             plain_message = (
@@ -523,7 +507,6 @@ class CleaningBookingViewSet(ModelViewSet):
             current_details.update(data['property_details'])
             instance.property_details = current_details
 
-        # Stripe payment link
         payment_link = instance.paymentlink
         if instance.payment_method == 'card' and instance.total > 0:
             try:
@@ -550,36 +533,27 @@ class CleaningBookingViewSet(ModelViewSet):
             'payment_method', 'selected_datetime', 'status', 'paymentlink', 'property_details', 'phone'
         ])
 
-        # Final confirmation email
         if status_changed_to_confirmed:
             try:
                 item_names = {}
-
-                # Merge all quantified items (including string keys like "Kitchen_Small")
                 all_items = {**instance.quantities, **instance.carpets, **instance.appliances}
 
-                # Determine which base areas have variations selected (to skip them later)
                 base_areas_to_skip = set()
                 for key in all_items.keys():
                     if isinstance(key, str) and '_' in key:
                         base = key.split('_')[0]
                         base_areas_to_skip.add(base)
 
-                # 1. Add selected_areas (skip numeric and base areas that have variations)
                 for area in (instance.selected_areas or []):
-                    if isinstance(area, str) and not area.isdigit():
-                        if area not in base_areas_to_skip:
-                            item_names[area] = 1
+                    if isinstance(area, str) and not area.isdigit() and area not in base_areas_to_skip:
+                        item_names[area] = 1
 
-                # 2. Process all items from all_items
                 numeric_ids = []
                 for key, qty in all_items.items():
-                    # Try to convert to integer to check if it's a service ID
                     try:
                         int(key)
                         numeric_ids.append(int(key))
                     except (ValueError, TypeError):
-                        # It's a string key – add directly (e.g., "Kitchen_Small")
                         try:
                             qty_int = int(qty)
                             if qty_int > 0:
@@ -587,7 +561,6 @@ class CleaningBookingViewSet(ModelViewSet):
                         except (ValueError, TypeError):
                             pass
 
-                # 3. Resolve numeric IDs to service names (no tenant/active filters)
                 services_map = {}
                 if numeric_ids:
                     services = Service.objects.filter(id__in=numeric_ids)
@@ -596,7 +569,6 @@ class CleaningBookingViewSet(ModelViewSet):
                     if missing:
                         logger.warning(f"Booking {instance.id}: missing service IDs {missing}")
 
-                # 4. Add resolved names
                 for sid in numeric_ids:
                     name = services_map.get(sid)
                     if name:
@@ -607,11 +579,7 @@ class CleaningBookingViewSet(ModelViewSet):
                             qty_int = 1
                         if qty_int > 0:
                             item_names[name] = item_names.get(name, 0) + qty_int
-                    else:
-                        # Optionally add a placeholder (but we'll skip to keep clean)
-                        pass
 
-                # 5. Add personal details
                 item_names["---"] = "---"
                 if instance.customer_name:
                     item_names["Name"] = instance.customer_name
@@ -636,7 +604,6 @@ class CleaningBookingViewSet(ModelViewSet):
                 if instance.property_details.get('postcode'):
                     item_names["Postcode"] = instance.property_details['postcode']
 
-                # Send email
                 html_message = render_to_string('thankyou.html', {
                     'booking_id': instance.id,
                     'total_quote': instance.total,
@@ -662,29 +629,23 @@ class CleaningBookingViewSet(ModelViewSet):
         return self.update(request, *args, **kwargs)
 
 
-
-
-
-
+# ============================================================
+# 7. BLOCKED TIMES API
+# ============================================================
 @api_view(['GET'])
 @permission_classes([AllowAny])
 def get_blocked_times(request):
     today = timezone.now().date()
-    
-    # Only fetch blocked dates from today onwards to keep the payload small
     blocks = BlockedTime.objects.filter(date__gte=today)
-    
+
     fully_blocked_dates = []
     partially_blocked_slots = {}
 
     for block in blocks:
-        date_str = block.date.isoformat() # Converts to "YYYY-MM-DD"
-        
+        date_str = block.date.isoformat()
         if not block.timeslot:
-            # If timeslot is blank, the whole day is blocked
             fully_blocked_dates.append(date_str)
         else:
-            # If there is a specific timeslot, add it to that date's list
             if date_str not in partially_blocked_slots:
                 partially_blocked_slots[date_str] = []
             partially_blocked_slots[date_str].append(block.timeslot)
@@ -693,7 +654,3 @@ def get_blocked_times(request):
         "fully_blocked_dates": fully_blocked_dates,
         "partially_blocked_slots": partially_blocked_slots
     })
-
-
-
-

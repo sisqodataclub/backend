@@ -7,7 +7,7 @@ User = get_user_model()
 
 
 # ==========================================
-# NEW: Service Category Model
+# Service Category Model
 # ==========================================
 class ServiceCategory(models.Model):
     tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
@@ -30,12 +30,10 @@ class ServiceCategory(models.Model):
 
 
 # ==========================================
-# UPDATED: Service Model (with category, ordering, addon flag)
+# Service Model
 # ==========================================
 class Service(models.Model):
     tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
-
-    # NEW: Link to Category
     category = models.ForeignKey(
         ServiceCategory,
         on_delete=models.SET_NULL,
@@ -43,37 +41,24 @@ class Service(models.Model):
         blank=True,
         related_name='services'
     )
-
     name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
     is_active = models.BooleanField(default=True)
-
-    # NEW: Display & Logic fields
     display_order = models.PositiveIntegerField(default=0)
     is_addon_only = models.BooleanField(
         default=False,
         help_text="If True, cannot be booked alone (e.g., 'Inside Fridge')"
     )
-
-    # Time attributes
     duration_minutes = models.PositiveIntegerField(help_text="How long the service takes")
     buffer_before = models.PositiveIntegerField(default=0, help_text="Preparation time after booking")
     buffer_after = models.PositiveIntegerField(default=0, help_text="Cleanup time after service")
     max_clients_per_slot = models.PositiveIntegerField(default=1)
-
-    # Staff assignment
     requires_assigned_staff = models.BooleanField(default=True)
     any_staff_can_serve = models.BooleanField(default=True)
-
-    # Pricing
     price_fixed = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
     price_per_hour = models.DecimalField(max_digits=10, decimal_places=2, blank=True, null=True)
-
-    # Location
     is_remote = models.BooleanField(default=False)
     address_required = models.BooleanField(default=False)
-
-    # Optional image
     image_url = models.URLField(blank=True, help_text="Service image")
 
     class Meta:
@@ -101,7 +86,7 @@ class Service(models.Model):
 
 
 # ==========================================
-# ServiceProvider (unchanged)
+# ServiceProvider Model
 # ==========================================
 class ServiceProvider(models.Model):
     tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
@@ -120,42 +105,156 @@ class ServiceProvider(models.Model):
 
 
 # ==========================================
-# ServiceBooking (unchanged)
+# CleaningBooking – master booking record
+# ==========================================
+class CleaningBooking(models.Model):
+    tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
+    session_id = models.CharField(max_length=100, unique=True, db_index=True)
+    customer_name = models.CharField(max_length=200)
+    customer_email = models.EmailField()
+    phone = models.CharField(max_length=20, blank=True)
+    selected_areas = models.JSONField(default=list)
+    quantities = models.JSONField(default=dict)
+    carpets = models.JSONField(default=dict)
+    appliances = models.JSONField(default=dict)
+    furnished_status = models.CharField(max_length=50, blank=True)
+    parking = models.CharField(max_length=50, blank=True)
+    biohazard = models.CharField(max_length=50, blank=True)
+    payment_method = models.CharField(max_length=50)
+    total = models.DecimalField(max_digits=10, decimal_places=2)
+    paymentlink = models.URLField(blank=True)
+    status = models.CharField(max_length=20, default='pending')
+    created_at = models.DateTimeField(auto_now_add=True)
+    property_details = models.JSONField(default=dict, blank=True)
+    selected_datetime = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"CleaningBooking {self.session_id}"
+
+
+# ==========================================
+# Enhanced ServiceBooking (linked to CleaningBooking)
 # ==========================================
 class ServiceBooking(models.Model):
-    STATUS_CHOICES = [
-        ('pending', 'Pending payment'),
-        ('confirmed', 'Confirmed'),
-        ('in_progress', 'In Progress'),
-        ('completed', 'Completed'),
-        ('cancelled', 'Cancelled'),
-        ('no_show', 'No Show'),
-    ]
+    # --- Link to the master cleaning booking ---
+    cleaning_booking = models.ForeignKey(
+        CleaningBooking,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='service_bookings',
+        help_text="Reference to the original cleaning booking (wizard data)"
+    )
 
+    # --- Denormalised customer info (for performance) ---
+    customer_email = models.EmailField()
+    customer_name = models.CharField(max_length=200, blank=True)
+
+    # --- Service & provider ---
     tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
     service = models.ForeignKey(Service, on_delete=models.PROTECT)
     provider = models.ForeignKey(ServiceProvider, on_delete=models.SET_NULL, null=True, blank=True)
 
-    customer_email = models.EmailField()
-    customer_name = models.CharField(max_length=200, blank=True)
-
+    # --- Scheduling ---
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
 
-    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
-    total_price = models.DecimalField(max_digits=10, decimal_places=2)
+    # --- Job status (renamed 'status' but kept for backwards compatibility) ---
+    status = models.CharField(
+        max_length=20,
+        choices=[
+            ('pending', 'Pending payment'),
+            ('confirmed', 'Confirmed'),
+            ('in_progress', 'In Progress'),
+            ('completed', 'Completed'),
+            ('cancelled', 'Cancelled'),
+            ('no_show', 'No Show'),
+        ],
+        default='pending'
+    )
 
+    total_price = models.DecimalField(max_digits=10, decimal_places=2)
     stripe_payment_intent_id = models.CharField(max_length=255, blank=True)
     customer_notes = models.TextField(blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
+    # --- ANALYTICAL FIELDS ---
+
+    # Payment tracking
+    PAYMENT_STATUS_CHOICES = [
+        ('unpaid', 'Unpaid'),
+        ('paid_cash', 'Paid (Cash)'),
+        ('paid_card', 'Paid (Card)'),
+        ('paid_bank', 'Paid (Bank Transfer)'),
+    ]
+    payment_status = models.CharField(
+        max_length=20,
+        choices=PAYMENT_STATUS_CHOICES,
+        default='unpaid',
+        db_index=True,
+    )
+    payment_date = models.DateTimeField(null=True, blank=True, help_text="Date and time payment was received")
+    payment_reference = models.CharField(max_length=255, blank=True, help_text="Stripe transaction ID or reference")
+
+    # Job completion
+    completed_at = models.DateTimeField(null=True, blank=True, help_text="Date and time the job was marked as completed")
+
+    # Complaint tracking
+    has_complaint = models.BooleanField(default=False)
+    complaint_notes = models.TextField(blank=True)
+    complaint_resolved = models.BooleanField(default=False)
+    complaint_resolved_at = models.DateTimeField(null=True, blank=True)
+
+    # Customer feedback
+    rating = models.PositiveSmallIntegerField(
+        null=True, blank=True,
+        choices=[(i, f"{i} Star{'s' if i > 1 else ''}") for i in range(1, 6)],
+        help_text="1-5 star rating from customer"
+    )
+    feedback_text = models.TextField(blank=True)
+
+    # Review request tracking
+    review_request_sent = models.BooleanField(default=False, help_text="Whether a review request email was sent to the customer")
+    review_requested_at = models.DateTimeField(null=True, blank=True, help_text="Date and time the review request was sent")
+
+    # Scheduling & rescheduling
+    reschedule_history = models.JSONField(default=list, blank=True, help_text="List of {from, to, reason} objects")
+    rescheduled_count = models.PositiveIntegerField(default=0, help_text="Number of times the booking was rescheduled")
+
+    # Financial breakdown
+    discount_applied = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    tax_applied = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
+    # Cancellation
+    cancellation_reason = models.TextField(blank=True)
+
+    # Marketing attribution
+    utm_source = models.CharField(max_length=100, blank=True)
+    utm_medium = models.CharField(max_length=100, blank=True)
+    utm_campaign = models.CharField(max_length=100, blank=True)
+
+    # Actual job duration
+    actual_duration_minutes = models.PositiveIntegerField(null=True, blank=True, help_text="Actual time spent on the job")
+
+    # Internal notes (admin only)
+    internal_notes = models.TextField(blank=True, help_text="Private admin notes")
+
     class Meta:
         ordering = ['-start_time']
         indexes = [
             models.Index(fields=['tenant', 'start_time']),
             models.Index(fields=['customer_email', 'status']),
+            models.Index(fields=['payment_status', 'payment_date']),
+            models.Index(fields=['status', 'completed_at']),
+            models.Index(fields=['has_complaint']),
+            models.Index(fields=['rating']),
+            models.Index(fields=['review_request_sent']),
+            models.Index(fields=['utm_source', 'utm_medium']),
         ]
 
     def clean(self):
@@ -175,9 +274,8 @@ class ServiceBooking(models.Model):
         return f"ServiceBooking #{self.id} - {self.service.name} for {self.customer_email}"
 
 
-
 # ==========================================
-# NEW: Cleaning Booking (Old wizard style)
+# BookingSnapshot (auto-save wizard data)
 # ==========================================
 class BookingSnapshot(models.Model):
     tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
@@ -194,47 +292,14 @@ class BookingSnapshot(models.Model):
         return f"Snapshot {self.session_id}"
 
 
-
-class CleaningBooking(models.Model):
-    tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
-    session_id = models.CharField(max_length=100, unique=True, db_index=True)
-    customer_name = models.CharField(max_length=200)
-    customer_email = models.EmailField()
-    phone = models.CharField(max_length=20, blank=True)
-    selected_areas = models.JSONField(default=list)
-    quantities = models.JSONField(default=dict)
-    carpets = models.JSONField(default=dict)
-    appliances = models.JSONField(default=dict)
-    furnished_status = models.CharField(max_length=50, blank=True)
-    parking = models.CharField(max_length=50, blank=True)
-    biohazard = models.CharField(max_length=50, blank=True)
-    payment_method = models.CharField(max_length=50)
-    total = models.DecimalField(max_digits=10, decimal_places=2)
-    paymentlink = models.URLField(blank=True)
-    status = models.CharField(max_length=20, default='pending')
-    created_at = models.DateTimeField(auto_now_add=True)
-    
-    # ✅ NEW: Flexible JSON store for address, postcode, and future location info
-    property_details = models.JSONField(default=dict, blank=True)
-
-
-   # ✅ NEW: Flexible JSON store for scheduling
-    selected_datetime = models.JSONField(default=dict, blank=True)
-
-    class Meta:
-        ordering = ['-created_at']
-
-    def __str__(self):
-        return f"CleaningBooking {self.session_id}"
-
-
-
-
+# ==========================================
+# BlockedTime (for calendar blocking)
+# ==========================================
 class BlockedTime(models.Model):
     date = models.DateField(db_index=True)
     timeslot = models.CharField(
-        max_length=50, 
-        blank=True, 
+        max_length=50,
+        blank=True,
         help_text="Leave blank to block the entire day. Otherwise, type the exact slot to block (e.g., '09:00 - 12:00')."
     )
     reason = models.CharField(max_length=200, blank=True, help_text="e.g., Bank Holiday, Fully Booked, etc.")
@@ -247,7 +312,3 @@ class BlockedTime(models.Model):
         if self.timeslot:
             return f"{self.date} | Blocked: {self.timeslot} ({self.reason})"
         return f"{self.date} | Blocked: Entire Day ({self.reason})"
-
-
-
-
