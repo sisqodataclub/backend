@@ -153,16 +153,21 @@ class ServiceBooking(models.Model):
     customer_email = models.EmailField()
     customer_name = models.CharField(max_length=200, blank=True)
 
+    # --- Additional fields copied from CleaningBooking ---
+    phone = models.CharField(max_length=20, blank=True, help_text="Customer phone number")
+    property_details = models.JSONField(default=dict, blank=True, help_text="Address, postcode, etc.")
+    selected_datetime = models.JSONField(default=dict, blank=True, help_text="Raw booking date and time slot")
+
     # --- Service & provider ---
     tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
     service = models.ForeignKey(Service, on_delete=models.PROTECT)
     provider = models.ForeignKey(ServiceProvider, on_delete=models.SET_NULL, null=True, blank=True)
 
-    # --- Scheduling ---
-    start_time = models.DateTimeField()
-    end_time = models.DateTimeField()
+    # --- Scheduling (now optional) ---
+    start_time = models.DateTimeField(null=True, blank=True, help_text="Start time of the booking")
+    end_time = models.DateTimeField(null=True, blank=True, help_text="End time of the booking")
 
-    # --- Job status (renamed 'status' but kept for backwards compatibility) ---
+    # --- Job status ---
     status = models.CharField(
         max_length=20,
         choices=[
@@ -258,16 +263,21 @@ class ServiceBooking(models.Model):
         ]
 
     def clean(self):
-        if self.start_time >= self.end_time:
-            raise ValidationError("End time must be after start time")
-        expected_end = self.start_time + timedelta(minutes=self.service.duration_minutes)
-        if self.end_time != expected_end:
-            raise ValidationError(f"End time must be {expected_end} for this service duration")
+        # Only validate time constraints if both start and end are provided
+        if self.start_time and self.end_time:
+            if self.start_time >= self.end_time:
+                raise ValidationError("End time must be after start time")
+            if self.service and self.service.duration_minutes:
+                expected_end = self.start_time + timedelta(minutes=self.service.duration_minutes)
+                if self.end_time != expected_end:
+                    raise ValidationError(f"End time must be {expected_end} for this service duration")
 
     def save(self, *args, **kwargs):
-        if not self.total_price:
+        # Auto-calculate total_price only if both times are set and service is known
+        if not self.total_price and self.start_time and self.end_time and self.service:
             duration = (self.end_time - self.start_time).total_seconds() / 60
             self.total_price = self.service.calculate_price(duration)
+        # If no times set, we keep whatever total_price was provided (or 0)
         super().save(*args, **kwargs)
 
     def __str__(self):

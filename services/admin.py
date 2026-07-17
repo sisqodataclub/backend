@@ -1,3 +1,4 @@
+# services/admin.py
 import datetime
 from django.contrib import admin
 from django import forms
@@ -26,6 +27,7 @@ class CreateServiceBookingForm(forms.Form):
         help_text="Optional: Dispatch to a specific provider immediately."
     )
 
+
 # ==========================================
 # CleaningBooking Admin
 # ==========================================
@@ -41,11 +43,8 @@ class CleaningBookingAdmin(admin.ModelAdmin):
         """
         Action dropdown: Redirects to our custom intermediate view
         """
-        # Convert selected IDs to a comma-separated string
         selected_ids = queryset.values_list('id', flat=True)
         ids_string = ','.join(map(str, selected_ids))
-        
-        # Redirect to the custom URL we define in get_urls()
         return redirect('admin:create_service_booking_from_cleaning', ids=ids_string)
     
     create_service_booking_action.short_description = "Promote to Service Booking(s)"
@@ -87,7 +86,6 @@ class CleaningBookingAdmin(admin.ModelAdmin):
                         
                         if booking_date and timeslot:
                             try:
-                                # Example timeslot: "09:00 - 12:00"
                                 date_obj = datetime.datetime.strptime(booking_date, '%Y-%m-%d').date()
                                 start_str = timeslot.split(' - ')[0].strip()
                                 start_time_obj = datetime.datetime.strptime(start_str, '%H:%M').time()
@@ -95,9 +93,10 @@ class CleaningBookingAdmin(admin.ModelAdmin):
                                 start_dt = timezone.make_aware(datetime.datetime.combine(date_obj, start_time_obj))
                                 end_dt = start_dt + datetime.timedelta(minutes=service.duration_minutes)
                             except Exception:
-                                pass # Fallback to default timezone.now() if parsing fails
+                                pass  # fallback to default
 
                     # 2. Determine payment status based on wizard data
+                    # (adjust according to your actual statuses)
                     mapped_payment_status = 'unpaid'
                     if cb.status == 'paid':
                         mapped_payment_status = 'paid_card' if cb.payment_method == 'stripe' else 'paid_cash'
@@ -105,16 +104,18 @@ class CleaningBookingAdmin(admin.ModelAdmin):
                     # 3. Create the ServiceBooking with auto-filled data
                     ServiceBooking.objects.create(
                         tenant=cb.tenant,
-                        cleaning_booking=cb,  # Links back to the raw wizard data
+                        cleaning_booking=cb,  # Link back to the raw wizard data
                         service=service,
                         provider=provider,
                         customer_name=cb.customer_name,
                         customer_email=cb.customer_email,
+                        # Phone field – uncomment if you add a `phone` field to ServiceBooking
+                        # phone=cb.phone,
                         total_price=cb.total,
                         start_time=start_dt,
                         end_time=end_dt,
                         payment_status=mapped_payment_status,
-                        status='confirmed', # Auto-confirm upon promotion
+                        status='confirmed',  # Auto-confirm upon promotion
                         # The remaining fields (rating, complaints, UTMs) stay blank per your request
                     )
                     created_count += 1
@@ -130,15 +131,116 @@ class CleaningBookingAdmin(admin.ModelAdmin):
             cleaning_bookings=cleaning_bookings,
             form=form,
         )
-        # We will create this template next
         return TemplateResponse(request, 'admin/cleaning_booking_create_service.html', context)
+
 
 # ==========================================
 # ServiceBooking Admin
 # ==========================================
 @admin.register(ServiceBooking)
 class ServiceBookingAdmin(admin.ModelAdmin):
-    list_display = ('id', 'customer_name', 'service', 'start_time', 'status', 'payment_status')
-    list_filter = ('status', 'payment_status', 'has_complaint')
-    search_fields = ('customer_name', 'customer_email')
-    readonly_fields = ('cleaning_booking', 'created_at', 'updated_at')
+    list_display = (
+        'id', 'customer_name', 'customer_email', 'service', 
+        'start_time', 'payment_status', 'status', 'total_price'
+    )
+    list_filter = ('tenant', 'status', 'payment_status', 'has_complaint', 'rating')
+    search_fields = ('customer_name', 'customer_email', 'service__name', 'internal_notes')
+    readonly_fields = (
+        'cleaning_booking', 'created_at', 'updated_at', 
+        'stripe_payment_intent_id', 'payment_reference',
+        'reschedule_history', 'rescheduled_count'
+    )
+    fieldsets = (
+        ('Booking Source', {
+            'fields': ('cleaning_booking',)
+        }),
+        ('Customer Information', {
+            'fields': ('customer_name', 'customer_email')
+        }),
+        ('Service & Provider', {
+            'fields': ('service', 'provider', 'start_time', 'end_time')
+        }),
+        ('Job Status & Completion', {
+            'fields': ('status', 'completed_at', 'actual_duration_minutes', 'customer_notes')
+        }),
+        ('Payment Details', {
+            'fields': ('payment_status', 'payment_date', 'payment_reference', 'total_price', 'discount_applied', 'tax_applied')
+        }),
+        ('Complaint Tracking', {
+            'fields': ('has_complaint', 'complaint_notes', 'complaint_resolved', 'complaint_resolved_at')
+        }),
+        ('Customer Feedback', {
+            'fields': ('rating', 'feedback_text', 'review_request_sent', 'review_requested_at')
+        }),
+        ('Rescheduling', {
+            'fields': ('reschedule_history', 'rescheduled_count')
+        }),
+        ('Marketing Attribution', {
+            'fields': ('utm_source', 'utm_medium', 'utm_campaign')
+        }),
+        ('Cancellation', {
+            'fields': ('cancellation_reason',)
+        }),
+        ('Internal Notes', {
+            'fields': ('internal_notes',)
+        }),
+        ('System Fields', {
+            'fields': ('id', 'created_at', 'updated_at', 'stripe_payment_intent_id'),
+            'classes': ('collapse',)
+        }),
+    )
+    ordering = ('-start_time',)
+
+
+# ==========================================
+# Register other models (unchanged)
+# ==========================================
+@admin.register(ServiceCategory)
+class ServiceCategoryAdmin(admin.ModelAdmin):
+    list_display = ('name', 'tenant', 'display_order', 'is_active')
+    list_filter = ('tenant', 'is_active')
+    search_fields = ('name',)
+    ordering = ('tenant', 'display_order', 'name')
+
+
+@admin.register(Service)
+class ServiceAdmin(admin.ModelAdmin):
+    list_display = ('name', 'category', 'tenant', 'price_fixed', 'price_per_hour', 'display_order', 'is_addon_only', 'is_active')
+    list_filter = ('tenant', 'is_active', 'is_addon_only', 'category', 'requires_assigned_staff')
+    search_fields = ('name', 'category__name')
+    ordering = ('tenant', 'category__display_order', 'display_order', 'name')
+
+
+@admin.register(ServiceProvider)
+class ServiceProviderAdmin(admin.ModelAdmin):
+    list_display = ('user', 'service', 'tenant', 'is_active')
+    list_filter = ('tenant', 'is_active')
+    search_fields = ('user__email', 'service__name')
+
+
+@admin.register(BookingSnapshot)
+class BookingSnapshotAdmin(admin.ModelAdmin):
+    list_display = ('session_id', 'tenant', 'is_final', 'created_at', 'updated_at')
+    list_filter = ('tenant', 'is_final', 'created_at')
+    search_fields = ('session_id', 'data')
+    readonly_fields = ('id', 'created_at', 'updated_at')
+    fieldsets = (
+        ('Snapshot Info', {
+            'fields': ('session_id', 'tenant', 'is_final')
+        }),
+        ('Stored Data', {
+            'fields': ('data',),
+            'classes': ('wide',)
+        }),
+        ('Timestamps', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+
+@admin.register(BlockedTime)
+class BlockedTimeAdmin(admin.ModelAdmin):
+    list_display = ('date', 'timeslot', 'reason')
+    list_filter = ('date',)
+    search_fields = ('reason', 'timeslot')
