@@ -39,7 +39,7 @@ from .serializers import (
     ServiceCategorySerializer,
     BookingSnapshotSerializer,
     CleaningBookingSerializer,
-    ServiceBookingAnalyticsSerializer,  # NEW
+    ServiceBookingAnalyticsSerializer,
 )
 
 # --- Helpers ---
@@ -290,8 +290,6 @@ class ServiceBookingAnalyticsView(generics.ListAPIView):
         'review_request_sent',
         'utm_source',
         'utm_medium',
-       # 'completed_at__date',
-       # 'payment_date__date',
     ]
     search_fields = ['customer_name', 'customer_email', 'service__name', 'complaint_notes', 'internal_notes']
     ordering_fields = ['created_at', 'total_price', 'customer_name', 'completed_at', 'payment_date']
@@ -654,3 +652,107 @@ def get_blocked_times(request):
         "fully_blocked_dates": fully_blocked_dates,
         "partially_blocked_slots": partially_blocked_slots
     })
+
+
+# ============================================================
+# 8. NEW: UNPROMOTED CLEANING BOOKINGS (for frontend)
+# ============================================================
+class UnpromotedCleaningBookingListView(generics.ListAPIView):
+    """
+    Returns CleaningBookings that have NOT yet been promoted to ServiceBooking.
+    Used by the frontend to populate the "Pending Promotions" section.
+    """
+    serializer_class = CleaningBookingSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [filters.OrderingFilter]
+    ordering = ['-created_at']
+
+    def get_queryset(self):
+        tenant = self.request.tenant
+        if not tenant:
+            return CleaningBooking.objects.none()
+        # Only those that have no related ServiceBooking
+        return CleaningBooking.objects.filter(tenant=tenant).filter(service_bookings__isnull=True)
+
+
+# ============================================================
+# 9. NEW: PROMOTE CLEANING BOOKING TO SERVICE BOOKING
+# ============================================================
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def promote_cleaning_booking(request, pk):
+    """
+    Promote a specific CleaningBooking to a ServiceBooking.
+    Expects { "service_id": <id>, "provider_id": <id> (optional) } in the request body.
+    """
+    tenant = request.tenant
+    if not tenant:
+        return Response({'error': 'Tenant not identified'}, status=400)
+
+    try:
+        cleaning_booking = CleaningBooking.objects.get(pk=pk, tenant=tenant)
+    except CleaningBooking.DoesNotExist:
+        return Response({'error': 'Cleaning booking not found'}, status=404)
+
+    # Check if already promoted
+    if cleaning_booking.service_bookings.exists():
+        return Response({'error': 'This cleaning booking has already been promoted.'}, status=400)
+
+    service_id = request.data.get('service_id')
+    if not service_id:
+        return Response({'error': 'service_id is required'}, status=400)
+    try:
+        service = Service.objects.get(pk=service_id, tenant=tenant)
+    except Service.DoesNotExist:
+        return Response({'error': 'Service not found'}, status=404)
+
+    provider_id = request.data.get('provider_id')
+    provider = None
+    if provider_id:
+        try:
+            provider = ServiceProvider.objects.get(pk=provider_id, tenant=tenant)
+        except ServiceProvider.DoesNotExist:
+            pass  # ignore invalid provider, leave unassigned
+
+    # Derive start/end from selected_datetime or fallback to now
+    start_dt = timezone.now()
+    end_dt = start_dt + timedelta(minutes=service.duration_minutes)
+
+    if isinstance(cleaning_booking.selected_datetime, dict):
+        booking_date = cleaning_booking.selected_datetime.get('booking_date')
+        timeslot = cleaning_booking.selected_datetime.get('timeslot')
+        if booking_date and timeslot:
+            try:
+                date_obj = datetime.strptime(booking_date, '%Y-%m-%d').date()
+                start_str = timeslot.split(' - ')[0].strip()
+                start_time_obj = datetime.strptime(start_str, '%H:%M').time()
+                start_dt = timezone.make_aware(datetime.combine(date_obj, start_time_obj))
+                end_dt = start_dt + timedelta(minutes=service.duration_minutes)
+            except Exception:
+                pass
+
+    # Map payment status
+    mapped_payment_status = 'unpaid'
+    if cleaning_booking.status == 'paid':
+        mapped_payment_status = 'paid_card' if cleaning_booking.payment_method == 'stripe' else 'paid_cash'
+
+    # Create ServiceBooking
+    service_booking = ServiceBooking.objects.create(
+        tenant=tenant,
+        cleaning_booking=cleaning_booking,
+        service=service,
+        provider=provider,
+        customer_name=cleaning_booking.customer_name,
+        customer_email=cleaning_booking.customer_email,
+        phone=cleaning_booking.phone,
+        property_details=cleaning_booking.property_details,
+        selected_datetime=cleaning_booking.selected_datetime,
+        total_price=cleaning_booking.total,
+        start_time=start_dt,
+        end_time=end_dt,
+        payment_status=mapped_payment_status,
+        status='confirmed',  # auto‑confirm upon promotion
+    )
+
+    serializer = ServiceBookingSerializer(service_booking)
+    return Response(serializer.data, status=201)
