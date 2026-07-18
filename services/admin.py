@@ -12,6 +12,41 @@ from .models import (
 )
 
 # ==========================================
+# Custom Admin Form for CleaningBooking
+# ==========================================
+class CleaningBookingAdminForm(forms.ModelForm):
+    """Handles JSON fields: empty objects are valid."""
+    class Meta:
+        model = CleaningBooking
+        fields = '__all__'
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Mark JSON fields as not required at the form level
+        self.fields['carpets'].required = False
+        self.fields['appliances'].required = False
+        self.fields['quantities'].required = False
+
+    def clean_carpets(self):
+        data = self.cleaned_data.get('carpets')
+        if data is None or data == {}:
+            return {}
+        return data
+
+    def clean_appliances(self):
+        data = self.cleaned_data.get('appliances')
+        if data is None or data == {}:
+            return {}
+        return data
+
+    def clean_quantities(self):
+        data = self.cleaned_data.get('quantities')
+        if data is None or data == {}:
+            return {}
+        return data
+
+
+# ==========================================
 # Form for the Intermediate Admin Action
 # ==========================================
 class CreateServiceBookingForm(forms.Form):
@@ -33,11 +68,27 @@ class CreateServiceBookingForm(forms.Form):
 # ==========================================
 @admin.register(CleaningBooking)
 class CleaningBookingAdmin(admin.ModelAdmin):
+    form = CleaningBookingAdminForm  # 👈 Apply the custom form
+
     list_display = ('session_id', 'customer_name', 'customer_email', 'total', 'status', 'created_at')
     list_filter = ('status', 'payment_method')
     search_fields = ('customer_name', 'customer_email', 'session_id')
-
     actions = ['create_service_booking_action']
+
+    # Optional: Add fieldsets for better organisation
+    fieldsets = (
+        ('Booking Details', {
+            'fields': ('tenant', 'session_id', 'customer_name', 'customer_email', 'phone',
+                       'selected_areas', 'quantities', 'carpets', 'appliances',
+                       'furnished_status', 'parking', 'biohazard', 'payment_method',
+                       'total', 'paymentlink', 'status', 'property_details', 'selected_datetime')
+        }),
+        ('System Fields', {
+            'fields': ('created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+    readonly_fields = ('created_at', 'updated_at')
 
     def create_service_booking_action(self, request, queryset):
         # Filter out those that already have a service booking
@@ -59,14 +110,14 @@ class CleaningBookingAdmin(admin.ModelAdmin):
 
         # Prepare IDs for the intermediate view
         ids_string = ','.join(map(str, [cb.id for cb in eligible]))
-        
+
         if already_converted:
             self.message_user(
                 request,
                 f"Skipped {len(already_converted)} cleaning booking(s) that were already converted. Proceeding with {len(eligible)}.",
                 level='warning'
             )
-        
+
         return redirect('admin:create_service_booking_from_cleaning', ids=ids_string)
 
     create_service_booking_action.short_description = "Promote to Service Booking(s)"
