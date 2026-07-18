@@ -68,14 +68,14 @@ class CreateServiceBookingForm(forms.Form):
 # ==========================================
 @admin.register(CleaningBooking)
 class CleaningBookingAdmin(admin.ModelAdmin):
-    form = CleaningBookingAdminForm  # 👈 Apply the custom form
+    form = CleaningBookingAdminForm
 
     list_display = ('session_id', 'customer_name', 'customer_email', 'total', 'status', 'created_at')
     list_filter = ('status', 'payment_method')
     search_fields = ('customer_name', 'customer_email', 'session_id')
     actions = ['create_service_booking_action']
 
-    # Optional: Add fieldsets for better organisation
+    # Fieldsets – removed 'updated_at' (doesn't exist on the model)
     fieldsets = (
         ('Booking Details', {
             'fields': ('tenant', 'session_id', 'customer_name', 'customer_email', 'phone',
@@ -84,11 +84,11 @@ class CleaningBookingAdmin(admin.ModelAdmin):
                        'total', 'paymentlink', 'status', 'property_details', 'selected_datetime')
         }),
         ('System Fields', {
-            'fields': ('created_at', 'updated_at'),
+            'fields': ('created_at',),   # only created_at exists
             'classes': ('collapse',)
         }),
     )
-    readonly_fields = ('created_at', 'updated_at')
+    readonly_fields = ('created_at',)   # only created_at
 
     def create_service_booking_action(self, request, queryset):
         # Filter out those that already have a service booking
@@ -204,7 +204,7 @@ class CleaningBookingAdmin(admin.ModelAdmin):
         context = dict(
             self.admin_site.each_context(request),
             title="Promote to Service Booking",
-            cleaning_bookings=eligible,  # Only show eligible bookings
+            cleaning_bookings=eligible,
             form=form,
         )
         return TemplateResponse(request, 'admin/cleaning_booking_create_service.html', context)
