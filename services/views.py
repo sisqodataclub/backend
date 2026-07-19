@@ -50,8 +50,8 @@ from products.models import Discount
 # 👇 Import the mapping function
 from .mapping import map_cleaning_status_to_service_status
 
-# 👇 Import the notification mixin
-from customer_notifications.mixins import NotificationButtonsMixin
+# 👇 Import the notification engine
+from customer_notifications.emails import send_arrival_notification, send_completion_and_review
 
 logger = logging.getLogger(__name__)
 
@@ -199,9 +199,8 @@ class ServiceViewSet(ModelViewSet):
 
 # ============================================================
 # 3. SERVICE BOOKING VIEWSET (Time-slot appointments)
-# 👇 Added NotificationButtonsMixin to provide /notify_arrival/ and /request_review/ endpoints
 # ============================================================
-class ServiceBookingViewSet(NotificationButtonsMixin, ModelViewSet):
+class ServiceBookingViewSet(ModelViewSet):
     serializer_class = ServiceBookingSerializer
     permission_classes = [IsAuthenticated]
 
@@ -210,10 +209,11 @@ class ServiceBookingViewSet(NotificationButtonsMixin, ModelViewSet):
             logger.warning("ServiceBookingViewSet accessed without tenant context")
             return ServiceBooking.objects.none()
 
+        # Dashboard access: return all bookings for the tenant (staff users only)
         user = self.request.user
         if user.is_staff:
             return ServiceBooking.objects.filter(tenant_id=self.request.tenant.id)
-
+        # Non‑staff users can only see their own bookings
         return ServiceBooking.objects.filter(
             tenant_id=self.request.tenant.id,
             customer_email=user.email
@@ -276,6 +276,38 @@ class ServiceBookingViewSet(NotificationButtonsMixin, ModelViewSet):
         booking.status = 'cancelled'
         booking.save()
         return Response({"status": "cancelled"})
+
+    # ============================================================
+    # CUSTOM NOTIFICATION ACTIONS (override mixin to accept eta)
+    # ============================================================
+    @action(detail=True, methods=['post'])
+    def notify_arrival(self, request, pk=None):
+        """Send arrival notification email. Accepts optional 'eta' in request body."""
+        booking = self.get_object()
+        eta = request.data.get('eta')
+        if send_arrival_notification(booking, eta=eta):
+            return Response(
+                {"message": "Arrival email sent successfully."},
+                status=status.HTTP_200_OK
+            )
+        return Response(
+            {"error": "Failed to send email. Check logs."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+    @action(detail=True, methods=['post'])
+    def request_review(self, request, pk=None):
+        """Send review request email."""
+        booking = self.get_object()
+        if send_completion_and_review(booking):
+            return Response(
+                {"message": "Review request sent successfully."},
+                status=status.HTTP_200_OK
+            )
+        return Response(
+            {"error": "Failed to send email. Check logs."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 
 # ============================================================
@@ -761,7 +793,7 @@ def promote_cleaning_booking(request, pk):
         start_time=start_dt,
         end_time=end_dt,
         payment_status=mapped_payment_status,
-        status=service_status,   # 👈 Now inherits correctly
+        status=service_status,   # 👈 Inherits correctly
     )
 
     serializer = ServiceBookingSerializer(service_booking)
