@@ -9,8 +9,9 @@ from .views import (
     CleaningBookingViewSet,
     ServiceBookingAnalyticsView,
     get_blocked_times,
-    UnpromotedCleaningBookingListView,   # NEW
-    promote_cleaning_booking,            # NEW
+    UnpromotedCleaningBookingListView,
+    promote_cleaning_booking,
+    CleaningBookingDetailView,   # NEW: Import the detail view
 )
 
 router = SimpleRouter()
@@ -28,9 +29,12 @@ urlpatterns = [
     path('bookings/', CleaningBookingViewSet.as_view({'post': 'create'}), name='old-booking-alias'),
     path('blocked-times/', get_blocked_times, name='blocked-times'),
 
-    # NEW: Frontend promotion endpoints
+    # Promotion and unpromoted endpoints
     path('cleaning-bookings/unpromoted/', UnpromotedCleaningBookingListView.as_view(), name='unpromoted-cleaning-bookings'),
     path('cleaning-bookings/<int:pk>/promote/', promote_cleaning_booking, name='promote-cleaning-booking'),
+
+    # NEW: Cleaning booking detail with resolved service names
+    path('cleaning-bookings/<int:pk>/details/', CleaningBookingDetailView.as_view(), name='cleaning-booking-details'),
 
     # 2. ROUTER LAST: Catches everything else (list, create, detail view lookups)
     path('', include(router.urls)),
