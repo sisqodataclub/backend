@@ -98,6 +98,8 @@ class CleaningBookingSerializer(serializers.ModelSerializer):
 class ServiceBookingAnalyticsSerializer(serializers.ModelSerializer):
     service_name = serializers.CharField(source='service.name', read_only=True)
     provider_name = serializers.CharField(source='provider.user.email', read_only=True, default=None)
+    # 👇 Added cleaning_booking_id field
+    cleaning_booking_id = serializers.IntegerField(source='cleaning_booking.id', read_only=True, allow_null=True)
 
     class Meta:
         model = ServiceBooking
@@ -118,4 +120,5 @@ class ServiceBookingAnalyticsSerializer(serializers.ModelSerializer):
             'actual_duration_minutes',
             'internal_notes',
             'created_at', 'updated_at',
+            'cleaning_booking_id',  # 👈 Added here
         ]
