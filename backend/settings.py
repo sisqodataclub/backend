@@ -64,6 +64,7 @@ INSTALLED_APPS = [
     'import_export',
 #    'sage_tools',
     'sage_invoice',     # The main invoice app
+    'customer_notifications',
 
 
     

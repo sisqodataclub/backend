@@ -47,6 +47,12 @@ from .availability import get_available_slots
 from payments.views import create_service_payment_intent
 from products.models import Discount
 
+# 👇 Import the mapping function
+from .mapping import map_cleaning_status_to_service_status
+
+# 👇 Import the notification mixin
+from customer_notifications.mixins import NotificationButtonsMixin
+
 logger = logging.getLogger(__name__)
 
 
@@ -193,8 +199,9 @@ class ServiceViewSet(ModelViewSet):
 
 # ============================================================
 # 3. SERVICE BOOKING VIEWSET (Time-slot appointments)
+# 👇 Added NotificationButtonsMixin to provide /notify_arrival/ and /request_review/ endpoints
 # ============================================================
-class ServiceBookingViewSet(ModelViewSet):
+class ServiceBookingViewSet(NotificationButtonsMixin, ModelViewSet):
     serializer_class = ServiceBookingSerializer
     permission_classes = [IsAuthenticated]
 
@@ -655,7 +662,7 @@ def get_blocked_times(request):
 
 
 # ============================================================
-# 8. NEW: UNPROMOTED CLEANING BOOKINGS (for frontend)
+# 8. UNPROMOTED CLEANING BOOKINGS (for frontend)
 # ============================================================
 class UnpromotedCleaningBookingListView(generics.ListAPIView):
     """
@@ -676,7 +683,7 @@ class UnpromotedCleaningBookingListView(generics.ListAPIView):
 
 
 # ============================================================
-# 9. NEW: PROMOTE CLEANING BOOKING TO SERVICE BOOKING
+# 9. PROMOTE CLEANING BOOKING TO SERVICE BOOKING
 # ============================================================
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -736,6 +743,9 @@ def promote_cleaning_booking(request, pk):
     if cleaning_booking.status == 'paid':
         mapped_payment_status = 'paid_card' if cleaning_booking.payment_method == 'stripe' else 'paid_cash'
 
+    # ✅ Inherit status from the cleaning booking
+    service_status = map_cleaning_status_to_service_status(cleaning_booking.status)
+
     # Create ServiceBooking
     service_booking = ServiceBooking.objects.create(
         tenant=tenant,
@@ -751,7 +761,7 @@ def promote_cleaning_booking(request, pk):
         start_time=start_dt,
         end_time=end_dt,
         payment_status=mapped_payment_status,
-        status='confirmed',  # auto‑confirm upon promotion
+        status=service_status,   # 👈 Now inherits correctly
     )
 
     serializer = ServiceBookingSerializer(service_booking)

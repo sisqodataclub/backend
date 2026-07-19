@@ -11,6 +11,9 @@ from .models import (
     CleaningBooking, ServiceBooking, BookingSnapshot, BlockedTime
 )
 
+# 👇 Import the mapping function
+from .mapping import map_cleaning_status_to_service_status
+
 # ==========================================
 # Custom Admin Form for CleaningBooking
 # ==========================================
@@ -22,7 +25,6 @@ class CleaningBookingAdminForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Mark JSON fields as not required at the form level
         self.fields['carpets'].required = False
         self.fields['appliances'].required = False
         self.fields['quantities'].required = False
@@ -75,7 +77,6 @@ class CleaningBookingAdmin(admin.ModelAdmin):
     search_fields = ('customer_name', 'customer_email', 'session_id')
     actions = ['create_service_booking_action']
 
-    # Fieldsets – removed 'updated_at' (doesn't exist on the model)
     fieldsets = (
         ('Booking Details', {
             'fields': ('tenant', 'session_id', 'customer_name', 'customer_email', 'phone',
@@ -84,14 +85,13 @@ class CleaningBookingAdmin(admin.ModelAdmin):
                        'total', 'paymentlink', 'status', 'property_details', 'selected_datetime')
         }),
         ('System Fields', {
-            'fields': ('created_at',),   # only created_at exists
+            'fields': ('created_at',),
             'classes': ('collapse',)
         }),
     )
-    readonly_fields = ('created_at',)   # only created_at
+    readonly_fields = ('created_at',)
 
     def create_service_booking_action(self, request, queryset):
-        # Filter out those that already have a service booking
         already_converted = []
         eligible = []
         for cb in queryset:
@@ -108,7 +108,6 @@ class CleaningBookingAdmin(admin.ModelAdmin):
             )
             return redirect('admin:services_cleaningbooking_changelist')
 
-        # Prepare IDs for the intermediate view
         ids_string = ','.join(map(str, [cb.id for cb in eligible]))
 
         if already_converted:
@@ -141,7 +140,6 @@ class CleaningBookingAdmin(admin.ModelAdmin):
             self.message_user(request, "No valid cleaning bookings found.", level='error')
             return redirect('admin:services_cleaningbooking_changelist')
 
-        # Additional safety: filter out any that might have been converted in the meantime
         eligible = [cb for cb in cleaning_bookings if not cb.service_bookings.exists()]
         if not eligible:
             self.message_user(request, "All selected cleaning bookings have already been converted.", level='warning')
@@ -155,7 +153,6 @@ class CleaningBookingAdmin(admin.ModelAdmin):
 
                 created_count = 0
                 for cb in eligible:
-                    # Parse datetime from selected_datetime JSON
                     start_dt = timezone.now()
                     end_dt = timezone.now() + datetime.timedelta(minutes=service.duration_minutes)
 
@@ -172,12 +169,13 @@ class CleaningBookingAdmin(admin.ModelAdmin):
                             except Exception:
                                 pass
 
-                    # Map payment status
                     mapped_payment_status = 'unpaid'
                     if cb.status == 'paid':
                         mapped_payment_status = 'paid_card' if cb.payment_method == 'stripe' else 'paid_cash'
 
-                    # Create ServiceBooking
+                    # ✅ Inherit status from the cleaning booking
+                    service_status = map_cleaning_status_to_service_status(cb.status)
+
                     ServiceBooking.objects.create(
                         tenant=cb.tenant,
                         cleaning_booking=cb,
@@ -192,7 +190,7 @@ class CleaningBookingAdmin(admin.ModelAdmin):
                         start_time=start_dt,
                         end_time=end_dt,
                         payment_status=mapped_payment_status,
-                        status='confirmed',
+                        status=service_status,   # 👈 Now inherits from cleaning booking
                     )
                     created_count += 1
 
