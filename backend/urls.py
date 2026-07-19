@@ -19,7 +19,10 @@ urlpatterns = [
     path('api/', include('products.urls')),
     path('api/', include('services.urls')),  # 👈 ADD THIS LINE updated
     path('api/payments/', include('payments.urls')),
-    
+
+    # 👇 NEW: Customer notifications (check if email already sent)
+    path('api/notifications/', include('customer_notifications.urls')),
+
     # NEW DASHBOARD ROUTE:
     path('api/v1/dashboard/overview/', superset_dashboard_data, name='dashboard_overview'),
 
