@@ -1,0 +1,9 @@
+Hi {{ customer_name }},
+
+Your job has been officially marked as complete! We hope your property looks immaculate.
+
+Word of mouth keeps us thriving. If you were happy with the service, would you take 30 seconds to let us know?
+
+Leave a review here: {{ review_url }}
+
+Thank you for your business!

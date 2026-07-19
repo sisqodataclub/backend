@@ -1,0 +1,7 @@
+Hi {{ customer_name }},
+
+Good news! Your specialist, {{ provider_name }}, is officially en route to your property.
+
+Estimated arrival window: {{ eta }}.
+
+Thank you for choosing us!
