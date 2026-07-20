@@ -83,7 +83,7 @@ class CleaningBookingAdmin(admin.ModelAdmin):
                        'selected_areas', 'quantities', 'carpets', 'appliances',
                        'furnished_status', 'parking', 'biohazard', 'payment_method',
                        'total', 'paymentlink', 'status', 'property_details', 'selected_datetime',
-                       'source')   # added source field
+                       'source')
         }),
         ('System Fields', {
             'fields': ('created_at',),
@@ -216,14 +216,16 @@ class CleaningBookingAdmin(admin.ModelAdmin):
 class ServiceBookingAdmin(admin.ModelAdmin):
     list_display = (
         'id', 'customer_name', 'customer_email', 'phone',
-        'service', 'start_time', 'payment_status', 'status', 'total_price'
+        'service', 'start_time', 'payment_status', 'status', 'total_price',
+        'last_arrival_sent_at', 'last_review_sent_at'  # 👈 Added properties
     )
     list_filter = ('tenant', 'status', 'payment_status', 'has_complaint', 'rating')
     search_fields = ('customer_name', 'customer_email', 'service__name', 'internal_notes')
     readonly_fields = (
         'cleaning_booking', 'created_at', 'updated_at',
         'stripe_payment_intent_id', 'payment_reference',
-        'reschedule_history', 'rescheduled_count'
+        'reschedule_history', 'rescheduled_count',
+        'last_arrival_sent_at', 'last_review_sent_at'   # 👈 Added properties as read-only
     )
 
     fieldsets = (
@@ -250,8 +252,11 @@ class ServiceBookingAdmin(admin.ModelAdmin):
             'fields': ('has_complaint', 'complaint_notes', 'complaint_resolved', 'complaint_resolved_at')
         }),
         ('Customer Feedback', {
-            # ✅ Removed 'review_request_sent' and 'review_requested_at' – now tracked via NotificationLog
             'fields': ('rating', 'feedback_text')
+        }),
+        ('Notification Tracking', {                         # 👈 New fieldset
+            'fields': ('last_arrival_sent_at', 'last_review_sent_at'),
+            'classes': ('collapse',)
         }),
         ('Rescheduling', {
             'fields': ('reschedule_history', 'rescheduled_count')
