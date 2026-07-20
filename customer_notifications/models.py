@@ -1,4 +1,6 @@
 from django.db import models
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.utils import timezone
 
 class NotificationLog(models.Model):
@@ -8,7 +10,12 @@ class NotificationLog(models.Model):
         ('review', 'Feedback Request'),
     )
 
-    booking_id = models.CharField(max_length=255, db_index=True)
+    # --- Generic Foreign Key (the magic bridge) ---
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.PositiveIntegerField()
+    content_object = GenericForeignKey('content_type', 'object_id')
+
+    # --- Notification fields ---
     notification_type = models.CharField(max_length=30, choices=NOTIFICATION_TYPES)
     recipient_email = models.EmailField()
     sent_at = models.DateTimeField(default=timezone.now)

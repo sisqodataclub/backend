@@ -12,9 +12,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_ETA = getattr(settings, 'DEFAULT_ARRIVAL_ETA', 'shortly')
 
 
-def _compile_and_send(recipient, subject, html_template, text_template, context, booking_id, notif_type):
+def _compile_and_send(recipient, subject, html_template, text_template, context, booking, notif_type):
     """
     Internal broker to compile template, handle fallbacks, and write to log.
+    Now accepts the full `booking` object (any model) for GFK linking.
     """
     if not recipient:
         logger.error(f"Aborted {notif_type}: No recipient email.")
@@ -35,8 +36,9 @@ def _compile_and_send(recipient, subject, html_template, text_template, context,
             fail_silently=False,
         )
 
+        # 🚀 Create log using GenericForeignKey – pass the whole object
         NotificationLog.objects.create(
-            booking_id=str(booking_id),
+            content_object=booking,       # 👈 Django extracts content_type + object_id automatically
             notification_type=notif_type,
             recipient_email=recipient,
             is_success=True
@@ -45,8 +47,9 @@ def _compile_and_send(recipient, subject, html_template, text_template, context,
     except Exception as e:
         error_msg = str(e)
         logger.error(f"Notification engine failure: {error_msg}")
+
         NotificationLog.objects.create(
-            booking_id=str(booking_id),
+            content_object=booking,       # Even failures are linked to the same booking
             notification_type=notif_type,
             recipient_email=recipient,
             is_success=False,
@@ -58,31 +61,28 @@ def _compile_and_send(recipient, subject, html_template, text_template, context,
 def send_arrival_notification(booking, provider_name=None, eta=None):
     """
     Send arrival notification to customer.
-    
+
     Args:
-        booking: Model instance with customer_name, customer_email, etc.
+        booking: Model instance (e.g., ServiceBooking) with customer_name, customer_email, etc.
         provider_name (str, optional): Override provider name.
-        eta (str, optional): Estimated arrival time (e.g., 'within 30 minutes', '2:30 PM').
-                              If not provided, uses DEFAULT_ARRIVAL_ETA from settings.
+        eta (str, optional): Estimated arrival time. Falls back to DEFAULT_ARRIVAL_ETA.
     """
-    # Determine the ETA to use
     if eta is None:
-        # First try to use DEFAULT_ARRIVAL_ETA from settings
         eta = DEFAULT_ETA
-    
+
     context = {
         'customer_name': getattr(booking, 'customer_name', 'Valued Customer'),
         'provider_name': provider_name or getattr(booking, 'provider_name', 'Our Service Specialist'),
         'eta': eta,
     }
-    
+
     return _compile_and_send(
         recipient=getattr(booking, 'customer_email', None),
         subject=getattr(settings, 'NOTIF_SUBJECT_ARRIVAL', 'Your provider is on the way!'),
         html_template='customer_notifications/arrival.html',
         text_template='customer_notifications/arrival.txt',
         context=context,
-        booking_id=getattr(booking, 'id', 'unknown'),
+        booking=booking,                 # 👈 Pass the object, not just ID
         notif_type='arrival'
     )
 
@@ -90,7 +90,7 @@ def send_arrival_notification(booking, provider_name=None, eta=None):
 def send_completion_and_review(booking, review_url=None):
     """
     Send completion and review request email.
-    
+
     Args:
         booking: Model instance with customer_name, customer_email, etc.
         review_url (str, optional): Override review URL. Uses CUSTOMER_REVIEW_URL from settings.
@@ -99,13 +99,13 @@ def send_completion_and_review(booking, review_url=None):
         'customer_name': getattr(booking, 'customer_name', 'Valued Customer'),
         'review_url': review_url or getattr(settings, 'CUSTOMER_REVIEW_URL', 'https://g.page/r/your-review-link/review'),
     }
-    
+
     return _compile_and_send(
         recipient=getattr(booking, 'customer_email', None),
         subject=getattr(settings, 'NOTIF_SUBJECT_REVIEW', 'How was your cleaning experience?'),
         html_template='customer_notifications/review.html',
         text_template='customer_notifications/review.txt',
         context=context,
-        booking_id=getattr(booking, 'id', 'unknown'),
+        booking=booking,                 # 👈 Pass the object
         notif_type='review'
     )

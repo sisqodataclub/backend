@@ -88,18 +88,21 @@ class BookingSnapshotSerializer(serializers.ModelSerializer):
 class CleaningBookingSerializer(serializers.ModelSerializer):
     class Meta:
         model = CleaningBooking
-        fields = '__all__'
+        fields = '__all__'          # ✅ Automatically includes the new 'source' field
         read_only_fields = ['id', 'created_at', 'status']
 
 
 # ============================================================
-# NEW: SERVICE BOOKING ANALYTICS SERIALIZER (for dashboard)
+# SERVICE BOOKING ANALYTICS SERIALIZER (for dashboard)
 # ============================================================
 class ServiceBookingAnalyticsSerializer(serializers.ModelSerializer):
     service_name = serializers.CharField(source='service.name', read_only=True)
     provider_name = serializers.CharField(source='provider.user.email', read_only=True, default=None)
-    # 👇 Added cleaning_booking_id field
     cleaning_booking_id = serializers.IntegerField(source='cleaning_booking.id', read_only=True, allow_null=True)
+
+    # 👇 Derived from NotificationLog via GenericRelation @property
+    last_arrival_sent_at = serializers.DateTimeField(read_only=True)
+    last_review_sent_at = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = ServiceBooking
@@ -108,11 +111,11 @@ class ServiceBookingAnalyticsSerializer(serializers.ModelSerializer):
             'service_name', 'provider_name',
             'start_time', 'end_time',
             'payment_status', 'payment_date', 'payment_reference',
-            'status',  # job status (pending, confirmed, etc.)
+            'status',
             'completed_at',
             'has_complaint', 'complaint_notes', 'complaint_resolved', 'complaint_resolved_at',
             'rating', 'feedback_text',
-            'review_request_sent', 'review_requested_at',
+            # ❌ Removed: 'review_request_sent', 'review_requested_at'
             'reschedule_history', 'rescheduled_count',
             'discount_applied', 'tax_applied', 'total_price',
             'cancellation_reason',
@@ -120,5 +123,7 @@ class ServiceBookingAnalyticsSerializer(serializers.ModelSerializer):
             'actual_duration_minutes',
             'internal_notes',
             'created_at', 'updated_at',
-            'cleaning_booking_id',  # 👈 Added here
+            'cleaning_booking_id',
+            'last_arrival_sent_at',
+            'last_review_sent_at',
         ]

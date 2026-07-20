@@ -2,6 +2,8 @@ from datetime import timedelta
 from django.db import models
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.contrib.contenttypes.fields import GenericRelation
+from customer_notifications.models import NotificationLog
 
 User = get_user_model()
 
@@ -108,6 +110,17 @@ class ServiceProvider(models.Model):
 # CleaningBooking – master booking record
 # ==========================================
 class CleaningBooking(models.Model):
+    # --- Booking Source Choices ---
+    SOURCE_CHOICES = [
+        ('website', 'Website'),
+        ('sms', 'SMS'),
+        ('call', 'Phone Call'),
+        ('whatsapp', 'WhatsApp'),
+        ('instagram_dm', 'Instagram DM'),
+        ('email', 'Email'),
+        ('other', 'Other'),
+    ]
+
     tenant = models.ForeignKey('core.Tenant', on_delete=models.CASCADE)
     session_id = models.CharField(max_length=100, unique=True, db_index=True)
     customer_name = models.CharField(max_length=200)
@@ -127,6 +140,15 @@ class CleaningBooking(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     property_details = models.JSONField(default=dict, blank=True)
     selected_datetime = models.JSONField(default=dict, blank=True)
+
+    # 👇 NEW: Optional source field
+    source = models.CharField(
+        max_length=20,
+        choices=SOURCE_CHOICES,
+        blank=True,
+        null=True,
+        help_text="How the booking was received (e.g., website, WhatsApp, etc.)"
+    )
 
     class Meta:
         ordering = ['-created_at']
@@ -223,9 +245,7 @@ class ServiceBooking(models.Model):
     )
     feedback_text = models.TextField(blank=True)
 
-    # Review request tracking
-    review_request_sent = models.BooleanField(default=False, help_text="Whether a review request email was sent to the customer")
-    review_requested_at = models.DateTimeField(null=True, blank=True, help_text="Date and time the review request was sent")
+    # 👇 REMOVED: review_request_sent and review_requested_at – now tracked via GFK
 
     # Scheduling & rescheduling
     reschedule_history = models.JSONField(default=list, blank=True, help_text="List of {from, to, reason} objects")
@@ -249,6 +269,9 @@ class ServiceBooking(models.Model):
     # Internal notes (admin only)
     internal_notes = models.TextField(blank=True, help_text="Private admin notes")
 
+    # --- Reverse link to NotificationLog via GenericForeignKey ---
+    notifications = GenericRelation(NotificationLog)
+
     class Meta:
         ordering = ['-start_time']
         indexes = [
@@ -258,12 +281,10 @@ class ServiceBooking(models.Model):
             models.Index(fields=['status', 'completed_at']),
             models.Index(fields=['has_complaint']),
             models.Index(fields=['rating']),
-            models.Index(fields=['review_request_sent']),
             models.Index(fields=['utm_source', 'utm_medium']),
         ]
 
     def clean(self):
-        # Only validate time constraints if both start and end are provided
         if self.start_time and self.end_time:
             if self.start_time >= self.end_time:
                 raise ValidationError("End time must be after start time")
@@ -273,12 +294,21 @@ class ServiceBooking(models.Model):
                     raise ValidationError(f"End time must be {expected_end} for this service duration")
 
     def save(self, *args, **kwargs):
-        # Auto-calculate total_price only if both times are set and service is known
         if not self.total_price and self.start_time and self.end_time and self.service:
             duration = (self.end_time - self.start_time).total_seconds() / 60
             self.total_price = self.service.calculate_price(duration)
-        # If no times set, we keep whatever total_price was provided (or 0)
         super().save(*args, **kwargs)
+
+    # --- 🧩 Properties to fetch latest notification timestamps ---
+    @property
+    def last_arrival_sent_at(self):
+        latest = self.notifications.filter(notification_type='arrival', is_success=True).first()
+        return latest.sent_at if latest else None
+
+    @property
+    def last_review_sent_at(self):
+        latest = self.notifications.filter(notification_type='review', is_success=True).first()
+        return latest.sent_at if latest else None
 
     def __str__(self):
         return f"ServiceBooking #{self.id} - {self.service.name} for {self.customer_email}"
