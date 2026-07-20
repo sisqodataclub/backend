@@ -72,8 +72,8 @@ class CreateServiceBookingForm(forms.Form):
 class CleaningBookingAdmin(admin.ModelAdmin):
     form = CleaningBookingAdminForm
 
-    list_display = ('session_id', 'customer_name', 'customer_email', 'total', 'status', 'created_at')
-    list_filter = ('status', 'payment_method')
+    list_display = ('session_id', 'customer_name', 'customer_email', 'total', 'status', 'created_at', 'source')
+    list_filter = ('status', 'payment_method', 'source')
     search_fields = ('customer_name', 'customer_email', 'session_id')
     actions = ['create_service_booking_action']
 
@@ -82,7 +82,8 @@ class CleaningBookingAdmin(admin.ModelAdmin):
             'fields': ('tenant', 'session_id', 'customer_name', 'customer_email', 'phone',
                        'selected_areas', 'quantities', 'carpets', 'appliances',
                        'furnished_status', 'parking', 'biohazard', 'payment_method',
-                       'total', 'paymentlink', 'status', 'property_details', 'selected_datetime')
+                       'total', 'paymentlink', 'status', 'property_details', 'selected_datetime',
+                       'source')   # added source field
         }),
         ('System Fields', {
             'fields': ('created_at',),
@@ -224,6 +225,7 @@ class ServiceBookingAdmin(admin.ModelAdmin):
         'stripe_payment_intent_id', 'payment_reference',
         'reschedule_history', 'rescheduled_count'
     )
+
     fieldsets = (
         ('Booking Source', {
             'fields': ('cleaning_booking',)
@@ -248,7 +250,8 @@ class ServiceBookingAdmin(admin.ModelAdmin):
             'fields': ('has_complaint', 'complaint_notes', 'complaint_resolved', 'complaint_resolved_at')
         }),
         ('Customer Feedback', {
-            'fields': ('rating', 'feedback_text', 'review_request_sent', 'review_requested_at')
+            # ✅ Removed 'review_request_sent' and 'review_requested_at' – now tracked via NotificationLog
+            'fields': ('rating', 'feedback_text')
         }),
         ('Rescheduling', {
             'fields': ('reschedule_history', 'rescheduled_count')
