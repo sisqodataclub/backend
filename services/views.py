@@ -383,7 +383,7 @@ class ServiceBookingAnalyticsView(generics.ListAPIView):
         'status',  # job status
         'has_complaint',
         'rating',
-        'review_request_sent',
+        # 'review_request_sent',  ❌ REMOVED – field no longer exists
         'utm_source',
         'utm_medium',
     ]
