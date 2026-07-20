@@ -484,7 +484,7 @@ SERVER_EMAIL = get_env_var('SERVER_EMAIL', 'root@localhost')
 
 # Admin emails for error reporting
 ADMINS = [
-    ('Admin', get_env_var('ADMIN_EMAIL', 'admin@franciscodes.com')),
+    ('Admin', get_env_var('ADMIN_EMAIL', 'fd92uk@gmail.com')),
 ]
 
 # ==============================================================================

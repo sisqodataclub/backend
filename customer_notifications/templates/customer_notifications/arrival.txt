@@ -1,7 +1,12 @@
 Hi {{ customer_name }},
 
-Good news! Your specialist, {{ provider_name }}, is officially en route to your property.
+Good news! Your service specialist from D Deep Cleaning Services is officially en route to your property.
 
 Estimated arrival window: {{ eta }}.
+
+If you have any questions, please contact us:
+Phone: 07459416262
+Email: clean@ddeepcleaningservices.com
+Website: https://www.ddeepcleaningservices.com/
 
 Thank you for choosing us!

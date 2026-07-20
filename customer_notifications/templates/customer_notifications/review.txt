@@ -1,9 +1,16 @@
 Hi {{ customer_name }},
 
-Your job has been officially marked as complete! We hope your property looks immaculate.
+Your cleaning service is officially complete! We hope your property looks immaculate and you're thrilled with the results.
 
-Word of mouth keeps us thriving. If you were happy with the service, would you take 30 seconds to let us know?
+As a local business, D Deep Cleaning Services relies heavily on word of mouth to keep growing. If you were happy with our work today, it would mean the world to us if you could take 30 seconds to share your experience on Google:
 
-Leave a review here: {{ review_url }}
+Post a review to our profile: https://g.page/r/CVxLGxl1Tj4eEBE/review
+
+If anything wasn't 100% to your satisfaction, please let us know directly so we can make it right.
+
+D Deep Cleaning Services Ltd
+Phone: 07459416262
+Email: clean@ddeepcleaningservices.com
+Website: https://www.ddeepcleaningservices.com/
 
 Thank you for your business!
