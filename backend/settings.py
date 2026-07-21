@@ -483,9 +483,14 @@ DEFAULT_FROM_EMAIL = get_env_var('DEFAULT_FROM_EMAIL', 'webmaster@localhost')
 SERVER_EMAIL = get_env_var('SERVER_EMAIL', 'root@localhost')
 
 # Admin emails for error reporting
+#ADMINS = [
+#    ('Admin', get_env_var('ADMIN_EMAIL', 'fd92uk@gmail.com')),
+#]
+
 ADMINS = [
-    ('Admin', get_env_var('ADMIN_EMAIL', 'fd92uk@gmail.com')),
+    ('Admin', 'fd92uk@gmail.com'),
 ]
+
 
 # ==============================================================================
 # 12. ADDITIONAL SETTINGS
