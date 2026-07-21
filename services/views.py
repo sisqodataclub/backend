@@ -564,7 +564,7 @@ class CleaningBookingViewSet(ModelViewSet):
                 subject="Your Quote Summary – Ddeep Cleaning Services",
                 message=plain_message,
                 from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[booking.customer_email, 'francis@dataclubcenter.com'],
+                recipient_list=[booking.customer_email, 'fd92uk@gmail.com'],
                 html_message=html_message,
                 fail_silently=False,
             )
@@ -708,7 +708,7 @@ class CleaningBookingViewSet(ModelViewSet):
                     subject="Booking Confirmed!",
                     message=plain_message,
                     from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[instance.customer_email, 'francis@dataclubcenter.com'],
+                    recipient_list=[instance.customer_email, 'fd92uk@gmail.com'],
                     html_message=html_message,
                     fail_silently=False,
                 )
