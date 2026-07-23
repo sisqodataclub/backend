@@ -45,7 +45,7 @@ class UmamiService:
             return None
 
     def get_stats(self, days=1, custom_start_at=None, custom_end_at=None):
-        """Fetches aggregate stats."""
+        """Fetches aggregate stats (page views, unique visitors, bounce rate, avg. session duration)."""
         if not self.is_configured():
             return None
 
@@ -139,7 +139,7 @@ class UmamiService:
             return None
 
     def get_metrics(self, metric_type="device", days=7, custom_start_at=None, custom_end_at=None):
-        """Fetches categorical metrics (device, os, etc.)."""
+        """Fetches categorical metrics (device, os, browser, referrer, etc.)."""
         if not self.is_configured():
             return []
 
@@ -165,4 +165,48 @@ class UmamiService:
 
         except Exception as e:
             logger.error(f"Failed to fetch Umami {metric_type} metrics: {str(e)}")
+            return []
+
+    # =========================================================
+    # NEW: Top Pages
+    # =========================================================
+    def get_pages(self, limit=10, days=7, custom_start_at=None, custom_end_at=None):
+        """
+        Fetches the most visited pages.
+        Returns a list of dicts: [{"url": "...", "visits": 123}, ...]
+        """
+        if not self.is_configured():
+            return []
+
+        token = self._get_auth_token()
+        if not token:
+            return []
+
+        try:
+            end_at = custom_end_at if custom_end_at else int(time.time() * 1000)
+            start_at = custom_start_at if custom_start_at else end_at - (days * 24 * 60 * 60 * 1000)
+
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json"
+            }
+
+            url = f"{self.api_url}/api/websites/{self.website_id}/pages?startAt={start_at}&endAt={end_at}&limit={limit}"
+
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+
+            # Umami returns an array of { "x": "/page", "y": 123 }
+            # We'll convert to a consistent format
+            pages = []
+            for item in data:
+                pages.append({
+                    "url": item.get("x", ""),
+                    "visits": item.get("y", 0)
+                })
+            return pages
+
+        except Exception as e:
+            logger.error(f"Failed to fetch Umami pages: {str(e)}")
             return []
