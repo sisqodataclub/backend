@@ -45,7 +45,10 @@ class UmamiService:
             return None
 
     def get_stats(self, days=1, custom_start_at=None, custom_end_at=None):
-        """Fetches aggregate stats (page views, unique visitors, bounce rate, avg. session duration)."""
+        """
+        Fetches aggregate stats and returns enriched metrics:
+        pageviews, visitors, bounce_rate (%), session_duration (seconds).
+        """
         if not self.is_configured():
             return None
 
@@ -66,8 +69,34 @@ class UmamiService:
 
             response = requests.get(url, headers=headers, timeout=10)
             response.raise_for_status()
+            data = response.json()
 
-            return response.json()
+            # Umami may return values as dicts (v3+) or raw ints (older versions)
+            def safe_get(key, default=0):
+                val = data.get(key, default)
+                if isinstance(val, dict):
+                    return val.get("value", default)
+                return val if isinstance(val, (int, float)) else default
+
+            pageviews = safe_get("pageviews")
+            visitors = safe_get("visitors")
+            bounces = safe_get("bounces")
+            totaltime = safe_get("totaltime")  # total time in seconds
+
+            # Calculate derived metrics
+            bounce_rate = round((bounces / visitors * 100) if visitors > 0 else 0, 1)
+            # Average session duration: totaltime / (number of sessions) where sessions = pageviews - bounces
+            sessions = max(1, pageviews - bounces)  # avoid division by zero
+            avg_session = round(totaltime / sessions, 1) if sessions > 0 else 0
+
+            return {
+                "pageviews": pageviews,
+                "visitors": visitors,
+                "bounces": bounces,
+                "totaltime": totaltime,
+                "bounce_rate": bounce_rate,
+                "session_duration": avg_session,
+            }
 
         except Exception as e:
             logger.error(f"Failed to fetch Umami stats: {str(e)}")
@@ -100,27 +129,27 @@ class UmamiService:
             if unit == "day" and (end_at - start_at) > (90 * 24 * 60 * 60 * 1000):
                 pvs_dict = {}
                 vis_dict = {}
-                
+
                 chunk_size = 90 * 24 * 60 * 60 * 1000
                 current_start = start_at
-                
+
                 while current_start < end_at:
                     current_end = min(current_start + chunk_size, end_at)
                     url = f"{self.api_url}/api/websites/{self.website_id}/pageviews?startAt={current_start}&endAt={current_end}&unit={unit}&timezone=Europe/London"
-                    
+
                     res = requests.get(url, headers=headers, timeout=15)
                     res.raise_for_status()
                     data = res.json()
-                    
-                    # We use dictionaries to safely overwrite overlapping boundary days 
+
+                    # We use dictionaries to safely overwrite overlapping boundary days
                     # ensuring we never double-count data.
                     for item in data.get('pageviews', []):
                         pvs_dict[item['x']] = item['y']
                     for item in data.get('sessions', []):
                         vis_dict[item['x']] = item['y']
-                        
+
                     current_start = current_end
-                    
+
                 # Reconstruct Umami's native array format for Django
                 return {
                     "pageviews": [{"x": k, "y": v} for k, v in pvs_dict.items()],
@@ -167,12 +196,9 @@ class UmamiService:
             logger.error(f"Failed to fetch Umami {metric_type} metrics: {str(e)}")
             return []
 
-    # =========================================================
-    # NEW: Top Pages
-    # =========================================================
     def get_pages(self, limit=10, days=7, custom_start_at=None, custom_end_at=None):
         """
-        Fetches the most visited pages.
+        Fetches the most visited pages using /metrics?type=path.
         Returns a list of dicts: [{"url": "...", "visits": 123}, ...]
         """
         if not self.is_configured():
@@ -191,14 +217,14 @@ class UmamiService:
                 "Content-Type": "application/json"
             }
 
-            url = f"{self.api_url}/api/websites/{self.website_id}/pages?startAt={start_at}&endAt={end_at}&limit={limit}"
+            # ✅ Correct endpoint: /metrics with type=path
+            url = f"{self.api_url}/api/websites/{self.website_id}/metrics?startAt={start_at}&endAt={end_at}&type=path&limit={limit}"
 
             response = requests.get(url, headers=headers, timeout=30)
             response.raise_for_status()
             data = response.json()
 
             # Umami returns an array of { "x": "/page", "y": 123 }
-            # We'll convert to a consistent format
             pages = []
             for item in data:
                 pages.append({
