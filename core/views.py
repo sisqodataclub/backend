@@ -217,11 +217,18 @@ def superset_dashboard_data(request):
 
     kpis = []
     if umami_stats:
-        # Extract values – Umami returns them as dicts with "value" key
-        pageviews = umami_stats.get("pageviews", {}).get("value", 0)
-        visitors = umami_stats.get("visitors", {}).get("value", 0)
-        bounce_rate = umami_stats.get("bounce_rate", {}).get("value", 0)
-        session_duration = umami_stats.get("session_duration", {}).get("value", 0)
+        # Safely extract values – Umami may return dict or int
+        pv_raw = umami_stats.get("pageviews", 0)
+        pageviews = pv_raw.get("value", 0) if isinstance(pv_raw, dict) else pv_raw
+
+        vis_raw = umami_stats.get("visitors", 0)
+        visitors = vis_raw.get("value", 0) if isinstance(vis_raw, dict) else vis_raw
+
+        bounce_raw = umami_stats.get("bounce_rate", 0)
+        bounce_rate = bounce_raw.get("value", 0) if isinstance(bounce_raw, dict) else bounce_raw
+
+        session_raw = umami_stats.get("session_duration", 0)
+        session_duration = session_raw.get("value", 0) if isinstance(session_raw, dict) else session_raw
 
         kpis.append({"id": "umami_1", "title": f"Page Views {time_label}", "value": pageviews, "change": 0})
         kpis.append({"id": "umami_2", "title": f"Unique Visitors {time_label}", "value": visitors, "change": 0})
