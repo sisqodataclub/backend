@@ -368,22 +368,23 @@ class ServiceBookingViewSet(ModelViewSet):
 
 
 # ============================================================
-# 4. ANALYTICS VIEW (for the dashboard)
+# 4. ANALYTICS VIEW (for the dashboard) – UPDATED WITH DATE FILTER
 # ============================================================
 class ServiceBookingAnalyticsView(generics.ListAPIView):
     """
     API endpoint for the analytics dashboard.
     Returns all bookings with all analytical fields, filterable and searchable.
+    Supports date range filtering via start_date and end_date query parameters
+    (filters on cleaning_booking__created_at).
     """
     serializer_class = ServiceBookingAnalyticsSerializer
     permission_classes = [IsAuthenticated]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = [
         'payment_status',
-        'status',  # job status
+        'status',          # job status
         'has_complaint',
         'rating',
-        # 'review_request_sent',  ❌ REMOVED – field no longer exists
         'utm_source',
         'utm_medium',
     ]
@@ -395,7 +396,33 @@ class ServiceBookingAnalyticsView(generics.ListAPIView):
         tenant = self.request.tenant
         if not tenant:
             return ServiceBooking.objects.none()
-        return ServiceBooking.objects.filter(tenant=tenant).select_related('service', 'provider', 'cleaning_booking')
+
+        # Base queryset with essential joins
+        queryset = ServiceBooking.objects.filter(tenant=tenant).select_related(
+            'service', 'provider', 'cleaning_booking'
+        )
+
+        # --- Date range filtering ---
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+
+        if start_date:
+            try:
+                start = datetime.strptime(start_date, '%Y-%m-%d').date()
+                queryset = queryset.filter(cleaning_booking__created_at__date__gte=start)
+            except ValueError:
+                # ignore invalid date string
+                pass
+
+        if end_date:
+            try:
+                end = datetime.strptime(end_date, '%Y-%m-%d').date()
+                queryset = queryset.filter(cleaning_booking__created_at__date__lte=end)
+            except ValueError:
+                # ignore invalid date string
+                pass
+
+        return queryset
 
 
 # ============================================================
