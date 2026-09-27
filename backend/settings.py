@@ -522,6 +522,7 @@ ECOMMERCE = {
 # ==============================================================================
 
 STRIPE_SECRET_KEY = get_env_var('STRIPE_SECRET_KEY', '')
+AGENT_API_KEY = os.environ.get('AGENT_API_KEY', '')
 STRIPE_PUBLISHABLE_KEY = get_env_var('STRIPE_PUBLISHABLE_KEY', '')
 STRIPE_WEBHOOK_SECRET = get_env_var('STRIPE_WEBHOOK_SECRET', '')
 
