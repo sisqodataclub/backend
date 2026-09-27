@@ -1,1 +1,1 @@
-PLACEHOLDER_TO_BE_REPLACED_WITH_FULL_FILE
+__FROM_FILE__:/app/data/workspaces/org_6ef34dab-51a1-4ff7-8e36-6cdd92f034c6/restored_views.py
