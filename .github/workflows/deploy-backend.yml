@@ -15,5 +15,7 @@ jobs:
           host: ${{ secrets.VPS_IP }}
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
-          # TODO: confirm VPS script path for backend repo
-          script: /opt/deploy_backend.sh
+          script: |
+            cd /opt
+            chmod +x deploy_mr.sh
+            /opt/deploy-wrapper.sh 6ef34dab-51a1-4ff7-8e36-6cdd92f034c6 forms /opt/deploy_mr.sh
