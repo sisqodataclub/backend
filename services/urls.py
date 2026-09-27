@@ -5,7 +5,6 @@ from .views import (
     ServiceViewSet,
     ServiceBookingViewSet,
     ServiceCategoryViewSet,
-    BookingSnapshotViewSet,
     CleaningBookingViewSet,
     ServiceBookingAnalyticsView,
     get_blocked_times,
@@ -18,7 +17,6 @@ router = SimpleRouter()
 router.register(r'service-categories', ServiceCategoryViewSet, basename='service-category')
 router.register(r'services', ServiceViewSet, basename='service')
 router.register(r'service-bookings', ServiceBookingViewSet, basename='service-booking')
-router.register(r'booking-snapshots', BookingSnapshotViewSet, basename='booking-snapshot')
 router.register(r'cleaning-bookings', CleaningBookingViewSet, basename='cleaning-booking')
 
 urlpatterns = [
