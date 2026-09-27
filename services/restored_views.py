@@ -1,9 +1,11 @@
 from datetime import datetime
-from rest_framework import generics, filters
-from rest_framework.permissions import IsAuthenticated
+from rest_framework import generics, filters, status
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django_filters.rest_framework import DjangoFilterBackend
-from .models import ServiceBooking
-from .serializers import ServiceBookingAnalyticsSerializer
+from .models import ServiceBooking, CleaningBooking
+from .serializers import ServiceBookingAnalyticsSerializer, CleaningBookingSerializer
 
 
 class ServiceBookingAnalyticsView(generics.ListAPIView):
@@ -73,3 +75,20 @@ def get_blocked_times(request):
         for bt in qs
     ]
     return Response({'blocked_times': data})
+
+
+class UnpromotedCleaningBookingListView(generics.ListAPIView):
+    """
+    List cleaning bookings that have not yet been promoted to ServiceBooking.
+    """
+    serializer_class = CleaningBookingSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        tenant = getattr(self.request, 'tenant', None)
+        if not tenant:
+            return CleaningBooking.objects.none()
+        return CleaningBooking.objects.filter(
+            tenant=tenant,
+            is_promoted=False,
+        ).order_by('-created_at')
