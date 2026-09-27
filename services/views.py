@@ -1,1 +1,1 @@
-<REAL_FULL_CONTENT_OF_/tmp/views_fixed.py>
+PLACEHOLDER_SEE_NEXT
