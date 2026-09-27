@@ -11,6 +11,7 @@ from .views import (
     UnpromotedCleaningBookingListView,
     promote_cleaning_booking,
     CleaningBookingDetailView,   # NEW: Import the detail view
+    AgentBookingsListView,       # NEW: read-only agent bookings endpoint
 )
 
 router = SimpleRouter()
@@ -22,6 +23,9 @@ router.register(r'cleaning-bookings', CleaningBookingViewSet, basename='cleaning
 urlpatterns = [
     # 1. EXPLICIT PATHS FIRST: These must be evaluated before the router
     path('service-bookings/analytics/', ServiceBookingAnalyticsView.as_view(), name='service-booking-analytics'),
+
+    # Read-only agent bookings endpoint (GET only, X-Agent-Key gated)
+    path('agent/bookings/', AgentBookingsListView.as_view(), name='agent-bookings'),
 
     # Aliases for old endpoints
     path('bookings/', CleaningBookingViewSet.as_view({'post': 'create'}), name='old-booking-alias'),
