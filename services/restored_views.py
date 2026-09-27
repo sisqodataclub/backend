@@ -50,3 +50,26 @@ class ServiceBookingAnalyticsView(generics.ListAPIView):
             except ValueError:
                 pass
         return queryset
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_blocked_times(request):
+    """
+    Return blocked time ranges for the current tenant.
+    """
+    from .models import BlockedTime
+    tenant = getattr(request, 'tenant', None)
+    if not tenant:
+        return Response({'blocked_times': []})
+    qs = BlockedTime.objects.filter(tenant=tenant).order_by('start_time')
+    data = [
+        {
+            'id': bt.id,
+            'start_time': bt.start_time.isoformat(),
+            'end_time': bt.end_time.isoformat(),
+            'reason': getattr(bt, 'reason', ''),
+        }
+        for bt in qs
+    ]
+    return Response({'blocked_times': data})
