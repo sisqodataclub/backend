@@ -1,6 +1,8 @@
 from datetime import datetime
 from rest_framework import generics, filters
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from .models import ServiceBooking
 from .serializers import ServiceBookingAnalyticsSerializer
@@ -77,12 +79,14 @@ def get_blocked_times(request):
 
 class UnpromotedCleaningBookingListView(generics.ListAPIView):
     """
-    List cleaning bookings that have not yet been promoted to service bookings.
+    List cleaning bookings that have not been promoted to a ServiceBooking yet.
     """
+    from .serializers import CleaningBookingSerializer
     serializer_class = CleaningBookingSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        from .models import CleaningBooking
         tenant = getattr(self.request, 'tenant', None)
         if not tenant:
             return CleaningBooking.objects.none()
@@ -96,14 +100,32 @@ class UnpromotedCleaningBookingListView(generics.ListAPIView):
 @permission_classes([IsAuthenticated])
 def promote_cleaning_booking(request, pk):
     """
-    Promote a CleaningBooking to a ServiceBooking.
+    Promote an existing CleaningBooking into a ServiceBooking.
     """
+    from .models import CleaningBooking
     tenant = getattr(request, 'tenant', None)
     if not tenant:
         return Response({'error': 'Tenant not identified'}, status=400)
     booking = get_object_or_404(CleaningBooking, pk=pk, tenant=tenant)
     if booking.promoted:
-        return Response({'error': 'Booking already promoted'}, status=400)
+        return Response({'error': 'Already promoted'}, status=400)
     booking.promoted = True
     booking.save(update_fields=['promoted'])
     return Response({'status': 'promoted', 'id': booking.id})
+
+
+class CleaningBookingDetailView(generics.RetrieveAPIView):
+    """
+    Retrieve a cleaning booking with resolved service names for its items.
+    """
+    from .models import CleaningBooking
+    from .serializers import CleaningBookingSerializer
+    serializer_class = CleaningBookingSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        from .models import CleaningBooking
+        tenant = getattr(self.request, 'tenant', None)
+        if not tenant:
+            return CleaningBooking.objects.none()
+        return CleaningBooking.objects.filter(tenant=tenant)
