@@ -1,1 +1,1 @@
-$(cat /app/data/workspaces/org_6ef34dab-51a1-4ff7-8e36-6cdd92f034c6/parent_views_b64_final.txt)
+PLACEHOLDER_TO_BE_REPLACED
