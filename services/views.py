@@ -958,6 +958,7 @@ class AgentBookingFlatSerializer(ModelSerializer):
 class AgentBookingsListView(generics.ListAPIView):
     """GET-only, read-only list of bookings scoped to tenant DDEEP."""
 
+    authentication_classes = []
     permission_classes = [HasAgentApiKey]
     serializer_class = AgentBookingFlatSerializer
 
