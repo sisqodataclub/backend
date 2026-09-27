@@ -168,3 +168,39 @@ class AgentBookingFlatSerializer(serializers.ModelSerializer):
                 if name:
                     names.append(name)
         return names
+
+
+# ============================================================
+# SERVICE BOOKING ANALYTICS SERIALIZER
+# ============================================================
+class ServiceBookingAnalyticsSerializer(serializers.ModelSerializer):
+    service_name = serializers.CharField(source='service.name', read_only=True)
+    provider_name = serializers.CharField(source='provider.user.email', read_only=True, default=None)
+    cleaning_booking_id = serializers.IntegerField(source='cleaning_booking.id', read_only=True, allow_null=True)
+
+    # Derived from NotificationLog via GenericRelation @property
+    last_arrival_sent_at = serializers.DateTimeField(read_only=True)
+    last_review_sent_at = serializers.DateTimeField(read_only=True)
+
+    class Meta:
+        model = ServiceBooking
+        fields = [
+            'id', 'customer_name', 'customer_email', 'phone',
+            'service_name', 'provider_name',
+            'start_time', 'end_time',
+            'payment_status', 'payment_date', 'payment_reference',
+            'status',
+            'completed_at',
+            'has_complaint', 'complaint_notes', 'complaint_resolved', 'complaint_resolved_at',
+            'rating', 'feedback_text',
+            'reschedule_history', 'rescheduled_count',
+            'discount_applied', 'tax_applied', 'total_price',
+            'cancellation_reason',
+            'utm_source', 'utm_medium', 'utm_campaign',
+            'actual_duration_minutes',
+            'internal_notes',
+            'created_at', 'updated_at',
+            'cleaning_booking_id',
+            'last_arrival_sent_at',
+            'last_review_sent_at',
+        ]
