@@ -378,7 +378,8 @@ class ServiceBookingAnalyticsView(generics.ListAPIView):
     (filters on cleaning_booking__created_at).
     """
     serializer_class = ServiceBookingAnalyticsSerializer
-    permission_classes = [IsAuthenticated]
+    authentication_classes = []
+    permission_classes = [HasAgentApiKey]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = [
         'payment_status',
