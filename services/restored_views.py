@@ -1,11 +1,9 @@
 from datetime import datetime
-from rest_framework import generics, filters, status
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework import generics, filters
+from rest_framework.permissions import IsAuthenticated
 from django_filters.rest_framework import DjangoFilterBackend
-from .models import ServiceBooking, CleaningBooking
-from .serializers import ServiceBookingAnalyticsSerializer, CleaningBookingSerializer
+from .models import ServiceBooking
+from .serializers import ServiceBookingAnalyticsSerializer
 
 
 class ServiceBookingAnalyticsView(generics.ListAPIView):
@@ -79,7 +77,7 @@ def get_blocked_times(request):
 
 class UnpromotedCleaningBookingListView(generics.ListAPIView):
     """
-    List cleaning bookings that have not yet been promoted to ServiceBooking.
+    List cleaning bookings that have not yet been promoted to service bookings.
     """
     serializer_class = CleaningBookingSerializer
     permission_classes = [IsAuthenticated]
@@ -90,5 +88,22 @@ class UnpromotedCleaningBookingListView(generics.ListAPIView):
             return CleaningBooking.objects.none()
         return CleaningBooking.objects.filter(
             tenant=tenant,
-            is_promoted=False,
+            promoted=False,
         ).order_by('-created_at')
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def promote_cleaning_booking(request, pk):
+    """
+    Promote a CleaningBooking to a ServiceBooking.
+    """
+    tenant = getattr(request, 'tenant', None)
+    if not tenant:
+        return Response({'error': 'Tenant not identified'}, status=400)
+    booking = get_object_or_404(CleaningBooking, pk=pk, tenant=tenant)
+    if booking.promoted:
+        return Response({'error': 'Booking already promoted'}, status=400)
+    booking.promoted = True
+    booking.save(update_fields=['promoted'])
+    return Response({'status': 'promoted', 'id': booking.id})
