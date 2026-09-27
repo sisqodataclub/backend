@@ -1,1 +1,1 @@
-<FULL_CONTENT_OF_/tmp/views_fixed.py>
+<REAL_FULL_CONTENT_OF_/tmp/views_fixed.py>
