@@ -95,18 +95,6 @@ class CleaningBookingSerializer(serializers.ModelSerializer):
 # AGENT BOOKING FLAT SERIALIZER (read-only, agent endpoint)
 # ============================================================
 class AgentBookingFlatSerializer(serializers.ModelSerializer):
-    """
-    Flat, read-only representation of a CleaningBooking for the
-    /api/agent/bookings/ endpoint.
-
-    CleaningBooking has no dedicated ``date``/``time``/``address``/
-    ``notes``/``services`` columns — those live inside JSON fields:
-      * date      <- selected_datetime['booking_date']
-      * time      <- selected_datetime['timeslot']
-      * address   <- property_details['address']
-      * services  <- resolved service names from quantities/carpets/appliances
-      * notes     <- not stored on the model; returned as empty string
-    """
     date = serializers.SerializerMethodField()
     time = serializers.SerializerMethodField()
     customer_name = serializers.CharField()
@@ -168,3 +156,39 @@ class AgentBookingFlatSerializer(serializers.ModelSerializer):
                 if name:
                     names.append(name)
         return names
+
+
+# ============================================================
+# SERVICE BOOKING ANALYTICS SERIALIZER (restored from 1909695f)
+# ============================================================
+class ServiceBookingAnalyticsSerializer(serializers.ModelSerializer):
+    service_name = serializers.CharField(source='service.name', read_only=True)
+    provider_name = serializers.CharField(source='provider.user.email', read_only=True, default=None)
+    cleaning_booking_id = serializers.IntegerField(source='cleaning_booking.id', read_only=True, allow_null=True)
+
+    # Derived from NotificationLog via GenericRelation @property
+    last_arrival_sent_at = serializers.DateTimeField(read_only=True)
+    last_review_sent_at = serializers.DateTimeField(read_only=True)
+
+    class Meta:
+        model = ServiceBooking
+        fields = [
+            'id', 'customer_name', 'customer_email', 'phone',
+            'service_name', 'provider_name',
+            'start_time', 'end_time',
+            'payment_status', 'payment_date', 'payment_reference',
+            'status',
+            'completed_at',
+            'has_complaint', 'complaint_notes', 'complaint_resolved', 'complaint_resolved_at',
+            'rating', 'feedback_text',
+            'reschedule_history', 'rescheduled_count',
+            'discount_applied', 'tax_applied', 'total_price',
+            'cancellation_reason',
+            'utm_source', 'utm_medium', 'utm_campaign',
+            'actual_duration_minutes',
+            'internal_notes',
+            'created_at', 'updated_at',
+            'cleaning_booking_id',
+            'last_arrival_sent_at',
+            'last_review_sent_at',
+        ]
