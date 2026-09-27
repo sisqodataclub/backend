@@ -1,1 +1,1 @@
-<CONTENTS_OF_/tmp/combined_views.py>
+<PLACEHOLDER_WILL_BE_READ_FROM_LOCAL_FILE>
