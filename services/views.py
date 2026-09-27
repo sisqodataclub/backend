@@ -1,1 +1,1 @@
-PLACEHOLDER_WILL_BE_REPLACED
+<CONTENTS_OF_/tmp/combined_views.py>
