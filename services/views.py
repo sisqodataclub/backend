@@ -50,6 +50,9 @@ from products.models import Discount
 # 👇 Import the mapping function
 from .mapping import map_cleaning_status_to_service_status
 
+# 👇 Agent API key permission
+from services.permissions import HasAgentApiKey
+
 # 👇 Import the notification engine
 from customer_notifications.emails import send_arrival_notification, send_completion_and_review
 
@@ -378,7 +381,8 @@ class ServiceBookingAnalyticsView(generics.ListAPIView):
     (filters on cleaning_booking__created_at).
     """
     serializer_class = ServiceBookingAnalyticsSerializer
-    permission_classes = [IsAuthenticated]
+    authentication_classes = []
+    permission_classes = [HasAgentApiKey]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = [
         'payment_status',
