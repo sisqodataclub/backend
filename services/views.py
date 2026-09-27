@@ -1,1 +1,1 @@
-PLACEHOLDER
+__FROM_FILE__/tmp/views_new.py
