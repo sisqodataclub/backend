@@ -972,4 +972,4 @@ class AgentBookingsListView(generics.ListAPIView):
                 except Exception:
                     pass
                 break
-        return qs.order_by('-date', '-time')
+        return qs.order_by('-created_at')
