@@ -936,11 +936,21 @@ class HasAgentApiKey(BasePermission):
 
 
 class AgentBookingFlatSerializer(ModelSerializer):
+    date = SerializerMethodField()
+    time = SerializerMethodField()
     services = SerializerMethodField()
 
     class Meta:
         model = CleaningBooking
         fields = ['id', 'date', 'time', 'customer_name', 'services', 'status', 'address', 'notes']
+
+    def get_date(self, obj):
+        sd = obj.selected_datetime if isinstance(obj.selected_datetime, dict) else {}
+        return sd.get('booking_date', '') or ''
+
+    def get_time(self, obj):
+        sd = obj.selected_datetime if isinstance(obj.selected_datetime, dict) else {}
+        return sd.get('timeslot', '') or ''
 
     def get_services(self, obj):
         # Best-effort: try common relation names, else fall back to a service field.
