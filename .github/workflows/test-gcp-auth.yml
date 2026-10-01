@@ -1,0 +1,26 @@
+name: Test GCP Authentication
+
+on:
+  workflow_dispatch: # This allows you to trigger the test manually
+
+jobs:
+  test-connection:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
+
+      - name: Set up Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify Connection
+        run: |
+          echo "Testing authentication..."
+          gcloud auth list
+          gcloud config get-value project
