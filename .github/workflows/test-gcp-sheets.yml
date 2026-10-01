@@ -6,12 +6,18 @@ on:
     branches:
       - test-gcp-sheets-workflow
 
+permissions:
+  contents: write
+
 jobs:
   test-sheets:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          ref: test-gcp-sheets-workflow
+          persist-credentials: true
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -34,14 +40,18 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
         run: |
           python - <<'PY'
+          import json
           import os
           import sys
           from googleapiclient.discovery import build
 
           summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
+          md_lines = []
+          data = []
 
           def emit(md):
               print(md)
+              md_lines.append(md)
               if summary_path:
                   with open(summary_path, 'a', encoding='utf-8') as fh:
                       fh.write(md + '\n')
@@ -54,6 +64,10 @@ jobs:
               sheets = build('sheets', 'v4')
           except Exception as e:
               emit(f'**Failed to build Google API clients:** {e}')
+              with open('gcp-sheets-list.md', 'w', encoding='utf-8') as fh:
+                  fh.write('\n'.join(md_lines))
+              with open('gcp-sheets-list.json', 'w', encoding='utf-8') as fh:
+                  json.dump(data, fh, indent=2)
               sys.exit(1)
 
           try:
@@ -64,31 +78,62 @@ jobs:
               ).execute()
           except Exception as e:
               emit(f'**Drive list call failed:** {e}')
+              with open('gcp-sheets-list.md', 'w', encoding='utf-8') as fh:
+                  fh.write('\n'.join(md_lines))
+              with open('gcp-sheets-list.json', 'w', encoding='utf-8') as fh:
+                  json.dump(data, fh, indent=2)
               sys.exit(1)
 
           files = resp.get('files', [])
           if not files:
               emit('_No spreadsheets accessible with this service account._')
-              sys.exit(0)
+          else:
+              emit(f'**Found {len(files)} accessible spreadsheet(s):**')
+              emit('')
+              for f in files:
+                  sid = f['id']
+                  name = f.get('name', '(no name)')
+                  emit(f'### {name}')
+                  emit('')
+                  emit(f'- id: `{sid}`')
+                  try:
+                      meta = sheets.spreadsheets().get(spreadsheetId=sid).execute()
+                      tabs = [s['properties']['title'] for s in meta.get('sheets', [])]
+                  except Exception as e:
+                      tabs = [f'<error reading tabs: {e}>']
+                  if tabs:
+                      emit('- tabs:')
+                      for t in tabs:
+                          emit(f'  - {t}')
+                  else:
+                      emit('- tabs: _(none)_')
+                  emit('')
+                  data.append({'id': sid, 'name': name, 'tabs': tabs})
 
-          emit(f'**Found {len(files)} accessible spreadsheet(s):**')
-          emit('')
-          for f in files:
-              sid = f['id']
-              name = f.get('name', '(no name)')
-              emit(f'### {name}')
-              emit('')
-              emit(f'- id: `{sid}`')
-              try:
-                  meta = sheets.spreadsheets().get(spreadsheetId=sid).execute()
-                  tabs = [s['properties']['title'] for s in meta.get('sheets', [])]
-              except Exception as e:
-                  tabs = [f'<error reading tabs: {e}>']
-              if tabs:
-                  emit('- tabs:')
-                  for t in tabs:
-                      emit(f'  - {t}')
-              else:
-                  emit('- tabs: _(none)_')
-              emit('')
+          with open('gcp-sheets-list.md', 'w', encoding='utf-8') as fh:
+              fh.write('\n'.join(md_lines) + '\n')
+          with open('gcp-sheets-list.json', 'w', encoding='utf-8') as fh:
+              json.dump(data, fh, indent=2)
           PY
+
+      - name: Commit sheet list back to branch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add gcp-sheets-list.md gcp-sheets-list.json
+          if git diff --cached --quiet; then
+            echo 'No changes to commit'
+          else
+            git commit -m 'Update gcp-sheets-list.md [skip ci]'
+            git push origin HEAD:test-gcp-sheets-workflow
+          fi
+
+      - name: Upload sheet list artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gcp-sheets-list
+          path: |
+            gcp-sheets-list.md
+            gcp-sheets-list.json
+          if-no-files-found: warn
