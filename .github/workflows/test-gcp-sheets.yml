@@ -59,11 +59,24 @@ jobs:
           emit('## Google Sheets accessible to service account')
           emit('')
 
+          # --- Surface the service account identity ---
+          creds_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
+          client_email = '(unknown)'
+          try:
+              with open(creds_path, 'r', encoding='utf-8') as fh:
+                  creds = json.load(fh)
+              client_email = creds.get('client_email', '(missing in credentials)')
+          except Exception as e:
+              client_email = f'(failed to read credentials: {e})'
+          emit(f'SERVICE_ACCOUNT_CLIENT_EMAIL: {client_email}')
+          emit('')
+
           try:
               drive = build('drive', 'v3')
               sheets = build('sheets', 'v4')
           except Exception as e:
               emit(f'**Failed to build Google API clients:** {e}')
+              emit('TOTAL_SHEETS_FOUND: 0')
               with open('gcp-sheets-list.md', 'w', encoding='utf-8') as fh:
                   fh.write('\n'.join(md_lines))
               with open('gcp-sheets-list.json', 'w', encoding='utf-8') as fh:
@@ -78,6 +91,7 @@ jobs:
               ).execute()
           except Exception as e:
               emit(f'**Drive list call failed:** {e}')
+              emit('TOTAL_SHEETS_FOUND: 0')
               with open('gcp-sheets-list.md', 'w', encoding='utf-8') as fh:
                   fh.write('\n'.join(md_lines))
               with open('gcp-sheets-list.json', 'w', encoding='utf-8') as fh:
@@ -85,6 +99,8 @@ jobs:
               sys.exit(1)
 
           files = resp.get('files', [])
+          emit(f'TOTAL_SHEETS_FOUND: {len(files)}')
+          emit('')
           if not files:
               emit('_No spreadsheets accessible with this service account._')
           else:
