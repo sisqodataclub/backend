@@ -34,14 +34,26 @@ jobs:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
         run: |
           python - <<'PY'
+          import os
           import sys
           from googleapiclient.discovery import build
+
+          summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
+
+          def emit(md):
+              print(md)
+              if summary_path:
+                  with open(summary_path, 'a', encoding='utf-8') as fh:
+                      fh.write(md + '\n')
+
+          emit('## Google Sheets accessible to service account')
+          emit('')
 
           try:
               drive = build('drive', 'v3')
               sheets = build('sheets', 'v4')
           except Exception as e:
-              print(f"Failed to build Google API clients: {e}")
+              emit(f'**Failed to build Google API clients:** {e}')
               sys.exit(1)
 
           try:
@@ -51,25 +63,32 @@ jobs:
                   pageSize=1000,
               ).execute()
           except Exception as e:
-              print(f"Drive list call failed: {e}")
+              emit(f'**Drive list call failed:** {e}')
               sys.exit(1)
 
           files = resp.get('files', [])
           if not files:
-              print("No spreadsheets accessible with this service account.")
+              emit('_No spreadsheets accessible with this service account._')
               sys.exit(0)
 
-          print(f"Found {len(files)} accessible spreadsheet(s):\n")
+          emit(f'**Found {len(files)} accessible spreadsheet(s):**')
+          emit('')
           for f in files:
               sid = f['id']
               name = f.get('name', '(no name)')
+              emit(f'### {name}')
+              emit('')
+              emit(f'- id: `{sid}`')
               try:
                   meta = sheets.spreadsheets().get(spreadsheetId=sid).execute()
                   tabs = [s['properties']['title'] for s in meta.get('sheets', [])]
               except Exception as e:
-                  tabs = [f"<error reading tabs: {e}>"]
-              print(f"- {name} (id={sid})")
-              for t in tabs:
-                  print(f"    tab: {t}")
-              print()
+                  tabs = [f'<error reading tabs: {e}>']
+              if tabs:
+                  emit('- tabs:')
+                  for t in tabs:
+                      emit(f'  - {t}')
+              else:
+                  emit('- tabs: _(none)_')
+              emit('')
           PY
