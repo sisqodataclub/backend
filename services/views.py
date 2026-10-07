@@ -51,6 +51,110 @@ from products.models import Discount
 # 👇 Import the mapping function
 from .mapping import map_cleaning_status_to_service_status
 
+# ============================================================
+# AUTO-PROMOTION: CleaningBooking -> ServiceBooking
+# ============================================================
+def _auto_promote_cleaning_booking(cleaning_booking):
+    """Create or update the matching ServiceBooking for a confirmed CleaningBooking."""
+    try:
+        tenant = cleaning_booking.tenant
+        # Resolve a service: prefer numeric IDs in quantities, else any tenant service
+        service = None
+        all_items = {}
+        try:
+            all_items = {**(cleaning_booking.quantities or {}), **(cleaning_booking.carpets or {}), **(cleaning_booking.appliances or {})}
+        except Exception:
+            all_items = {}
+        numeric_ids = []
+        for k in all_items.keys():
+            try:
+                numeric_ids.append(int(k))
+            except (ValueError, TypeError):
+                pass
+        if numeric_ids:
+            service = Service.objects.filter(tenant=tenant, id__in=numeric_ids).first()
+        if service is None:
+            service = Service.objects.filter(tenant=tenant).first()
+        if service is None:
+            logger.warning(f"Auto-promote: no Service available for tenant {getattr(tenant,'id',None)}")
+            return None
+
+        # Derive start/end
+        start_dt = timezone.now()
+        end_dt = start_dt + timedelta(minutes=getattr(service, 'duration_minutes', 60) or 60)
+        sd = cleaning_booking.selected_datetime
+        if isinstance(sd, dict):
+            booking_date = sd.get('booking_date')
+            timeslot = sd.get('timeslot')
+            if booking_date and timeslot:
+                try:
+                    date_obj = datetime.strptime(booking_date, '%Y-%m-%d').date()
+                    start_str = timeslot.split(' - ')[0].strip()
+                    start_time_obj = datetime.strptime(start_str, '%H:%M').time()
+                    start_dt = timezone.make_aware(datetime.combine(date_obj, start_time_obj))
+                    end_dt = start_dt + timedelta(minutes=getattr(service, 'duration_minutes', 60) or 60)
+                except Exception:
+                    pass
+
+        mapped_payment_status = 'unpaid'
+        if cleaning_booking.status == 'paid':
+            mapped_payment_status = 'paid_card' if cleaning_booking.payment_method == 'stripe' else 'paid_cash'
+
+        service_status = 'confirmed'
+        try:
+            service_status = map_cleaning_status_to_service_status(cleaning_booking.status)
+        except Exception:
+            pass
+
+        existing = cleaning_booking.service_bookings.first()
+        if existing:
+            existing.service = service
+            existing.customer_name = cleaning_booking.customer_name
+            existing.customer_email = cleaning_booking.customer_email
+            existing.phone = cleaning_booking.phone
+            existing.property_details = cleaning_booking.property_details
+            existing.selected_datetime = cleaning_booking.selected_datetime
+            existing.total_price = cleaning_booking.total
+            existing.start_time = start_dt
+            existing.end_time = end_dt
+            existing.payment_status = mapped_payment_status
+            existing.status = service_status
+            existing.save()
+            return existing
+
+        return ServiceBooking.objects.create(
+            tenant=tenant,
+            cleaning_booking=cleaning_booking,
+            service=service,
+            customer_name=cleaning_booking.customer_name,
+            customer_email=cleaning_booking.customer_email,
+            phone=cleaning_booking.phone,
+            property_details=cleaning_booking.property_details,
+            selected_datetime=cleaning_booking.selected_datetime,
+            total_price=cleaning_booking.total,
+            start_time=start_dt,
+            end_time=end_dt,
+            payment_status=mapped_payment_status,
+            status=service_status,
+        )
+    except Exception as e:
+        logger.warning(f"Auto-promote failed for CleaningBooking {getattr(cleaning_booking,'id',None)}: {e}")
+        return None
+
+
+def backfill_confirmed_cleaning_bookings(tenant=None):
+    """One-time backfill: promote all confirmed CleaningBookings lacking a ServiceBooking."""
+    qs = CleaningBooking.objects.filter(status='confirmed', service_bookings__isnull=True)
+    if tenant is not None:
+        qs = qs.filter(tenant=tenant)
+    count = 0
+    for cb in qs:
+        if _auto_promote_cleaning_booking(cb):
+            count += 1
+    return count
+
+
+
 # 👇 Agent API key permission
 from services.permissions import HasAgentApiKey
 
@@ -658,6 +762,13 @@ class CleaningBookingViewSet(ModelViewSet):
         instance.save(update_fields=[
             'payment_method', 'selected_datetime', 'status', 'paymentlink', 'property_details', 'phone'
         ])
+
+        # AUTO_PROMOTE_HOOK: keep ServiceBooking in sync with confirmed CleaningBookings
+        if instance.status == 'confirmed':
+            try:
+                _auto_promote_cleaning_booking(instance)
+            except Exception as e:
+                logger.warning(f"Auto-promote hook failed: {e}")
 
         if status_changed_to_confirmed:
             try:
