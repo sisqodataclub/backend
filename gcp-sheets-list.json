@@ -3,16 +3,57 @@
     "id": "1zEwnQkKA0Fk_hZnLDq0b6RoshfWARN54MywrR7pnZSo",
     "name": "ddeepcleaningservices.com-Performance-on-Search-2026-07-20",
     "tabs": [
-      "Chart",
-      "Queries",
-      "Pivot Table 1",
-      "Pages",
-      "Countries",
-      "Devices",
-      "Search appearance",
-      "Filters",
-      "Sheet1",
-      "Sheet2"
-    ]
+      {
+        "title": "Chart",
+        "rows": 29,
+        "cols": 5
+      },
+      {
+        "title": "Queries",
+        "rows": 840,
+        "cols": 5
+      },
+      {
+        "title": "Pivot Table 1",
+        "rows": 1,
+        "cols": 1
+      },
+      {
+        "title": "Pages",
+        "rows": 14,
+        "cols": 5
+      },
+      {
+        "title": "Countries",
+        "rows": 75,
+        "cols": 5
+      },
+      {
+        "title": "Devices",
+        "rows": 4,
+        "cols": 5
+      },
+      {
+        "title": "Search appearance",
+        "rows": 1,
+        "cols": 5
+      },
+      {
+        "title": "Filters",
+        "rows": 3,
+        "cols": 2
+      },
+      {
+        "title": "Sheet1",
+        "rows": 5,
+        "cols": 9
+      },
+      {
+        "title": "Sheet2",
+        "rows": 5,
+        "cols": 9
+      }
+    ],
+    "file": "gcp-sheets-data/ddeepcleaningservices.com-Performance-on-Search-2026-07-20__1zEwnQkKA0Fk_hZnLDq0b6RoshfWARN54MywrR7pnZSo.json"
   }
 ]
