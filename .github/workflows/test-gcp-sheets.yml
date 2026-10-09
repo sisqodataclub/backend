@@ -35,19 +35,21 @@ jobs:
           python -m pip install --upgrade pip
           pip install google-api-python-client google-auth
 
-      - name: List accessible spreadsheets and their tabs
+      - name: Dump accessible spreadsheets and all tab values
         env:
           GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
+          TARGET_SHEET_NAME: 'ddeepcleaningservices.com-Performance-on-Search-2026-07-20'
         run: |
           python - <<'PY'
           import json
           import os
+          import re
           import sys
           from googleapiclient.discovery import build
 
           summary_path = os.environ.get('GITHUB_STEP_SUMMARY')
           md_lines = []
-          data = []
+          index = []
 
           def emit(md):
               print(md)
@@ -56,10 +58,12 @@ jobs:
                   with open(summary_path, 'a', encoding='utf-8') as fh:
                       fh.write(md + '\n')
 
-          emit('## Google Sheets accessible to service account')
+          def slug(name):
+              return re.sub(r'[^A-Za-z0-9._-]+', '_', name)[:120]
+
+          emit('## Google Sheets extraction (with tab values)')
           emit('')
 
-          # --- Surface the service account identity ---
           creds_path = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')
           client_email = '(unknown)'
           try:
@@ -80,7 +84,7 @@ jobs:
               with open('gcp-sheets-list.md', 'w', encoding='utf-8') as fh:
                   fh.write('\n'.join(md_lines))
               with open('gcp-sheets-list.json', 'w', encoding='utf-8') as fh:
-                  json.dump(data, fh, indent=2)
+                  json.dump(index, fh, indent=2)
               sys.exit(1)
 
           try:
@@ -95,61 +99,87 @@ jobs:
               with open('gcp-sheets-list.md', 'w', encoding='utf-8') as fh:
                   fh.write('\n'.join(md_lines))
               with open('gcp-sheets-list.json', 'w', encoding='utf-8') as fh:
-                  json.dump(data, fh, indent=2)
+                  json.dump(index, fh, indent=2)
               sys.exit(1)
 
           files = resp.get('files', [])
           emit(f'TOTAL_SHEETS_FOUND: {len(files)}')
           emit('')
-          if not files:
-              emit('_No spreadsheets accessible with this service account._')
-          else:
-              emit(f'**Found {len(files)} accessible spreadsheet(s):**')
+
+          os.makedirs('gcp-sheets-data', exist_ok=True)
+
+          target = os.environ.get('TARGET_SHEET_NAME', '').strip()
+          if target:
+              emit(f'TARGET_SHEET_NAME: {target}')
               emit('')
-              for f in files:
-                  sid = f['id']
-                  name = f.get('name', '(no name)')
-                  emit(f'### {name}')
+
+          for f in files:
+              sid = f['id']
+              name = f.get('name', '(no name)')
+              emit(f'### {name}')
+              emit('')
+              emit(f'- id: `{sid}`')
+              try:
+                  meta = sheets.spreadsheets().get(spreadsheetId=sid).execute()
+                  tab_meta = meta.get('sheets', [])
+              except Exception as e:
+                  emit(f'- ERROR reading spreadsheet metadata: {e}')
                   emit('')
-                  emit(f'- id: `{sid}`')
+                  index.append({'id': sid, 'name': name, 'error': str(e)})
+                  continue
+
+              tab_summaries = []
+              per_sheet = {'id': sid, 'name': name, 'tabs': []}
+              for s in tab_meta:
+                  title = s['properties']['title']
                   try:
-                      meta = sheets.spreadsheets().get(spreadsheetId=sid).execute()
-                      tabs = [s['properties']['title'] for s in meta.get('sheets', [])]
+                      vr = sheets.spreadsheets().values().get(
+                          spreadsheetId=sid,
+                          range=f"'{title}'",
+                      ).execute()
+                      values = vr.get('values', [])
                   except Exception as e:
-                      tabs = [f'<error reading tabs: {e}>']
-                  if tabs:
-                      emit('- tabs:')
-                      for t in tabs:
-                          emit(f'  - {t}')
-                  else:
-                      emit('- tabs: _(none)_')
-                  emit('')
-                  data.append({'id': sid, 'name': name, 'tabs': tabs})
+                      values = []
+                      emit(f'  - {title}: ERROR {e}')
+                  row_count = len(values)
+                  col_count = max((len(r) for r in values), default=0)
+                  tab_summaries.append({'title': title, 'rows': row_count, 'cols': col_count})
+                  per_sheet['tabs'].append({'title': title, 'rows': values})
+                  emit(f'  - {title}: rows={row_count} cols={col_count}')
+
+              fname = f'gcp-sheets-data/{slug(name)}__{sid}.json'
+              with open(fname, 'w', encoding='utf-8') as fh:
+                  json.dump(per_sheet, fh, indent=2)
+              emit('')
+              emit(f'- dumped: `{fname}`')
+              emit('')
+              index.append({'id': sid, 'name': name, 'tabs': tab_summaries, 'file': fname})
 
           with open('gcp-sheets-list.md', 'w', encoding='utf-8') as fh:
               fh.write('\n'.join(md_lines) + '\n')
           with open('gcp-sheets-list.json', 'w', encoding='utf-8') as fh:
-              json.dump(data, fh, indent=2)
+              json.dump(index, fh, indent=2)
           PY
 
-      - name: Commit sheet list back to branch
+      - name: Commit extracted data back to branch
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add gcp-sheets-list.md gcp-sheets-list.json
+          git add gcp-sheets-list.md gcp-sheets-list.json gcp-sheets-data || true
           if git diff --cached --quiet; then
             echo 'No changes to commit'
           else
-            git commit -m 'Update gcp-sheets-list.md [skip ci]'
+            git commit -m 'Update gcp-sheets extraction [skip ci]'
             git push origin HEAD:test-gcp-sheets-workflow
           fi
 
-      - name: Upload sheet list artifact
+      - name: Upload extraction artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: gcp-sheets-list
+          name: gcp-sheets-extraction
           path: |
             gcp-sheets-list.md
             gcp-sheets-list.json
+            gcp-sheets-data/**
           if-no-files-found: warn
