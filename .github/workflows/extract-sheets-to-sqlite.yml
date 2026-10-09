@@ -1,0 +1,172 @@
+name: Extract Google Sheets to SQLite
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - test-gcp-sheets-workflow
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: test-gcp-sheets-workflow
+          persist-credentials: true
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: '${{ secrets.GCP_CREDENTIALS }}'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-api-python-client google-auth
+
+      - name: Extract sheets to sqlite
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
+        run: |
+          python - <<'PY'
+          import os, sqlite3, re, datetime
+          from googleapiclient.discovery import build
+
+          drive = build('drive', 'v3')
+          sheets = build('sheets', 'v4')
+
+          # list all spreadsheets visible to the service account
+          files = []
+          page_token = None
+          while True:
+              resp = drive.files().list(
+                  q="mimeType='application/vnd.google-apps.spreadsheet'",
+                  fields='nextPageToken, files(id, name)',
+                  pageSize=100,
+                  pageToken=page_token,
+              ).execute()
+              files.extend(resp.get('files', []))
+              page_token = resp.get('nextPageToken')
+              if not page_token:
+                  break
+
+          print(f'Found {len(files)} spreadsheets')
+
+          db_path = 'sheets_extract.sqlite3'
+          if os.path.exists(db_path):
+              os.remove(db_path)
+          conn = sqlite3.connect(db_path)
+          cur = conn.cursor()
+          cur.execute('''
+              CREATE TABLE _meta (
+                  spreadsheet_name TEXT,
+                  tab_name TEXT,
+                  table_name TEXT,
+                  row_count INTEGER,
+                  extracted_at TEXT
+              )
+          ''')
+
+          def sanitize(name):
+              s = re.sub(r'[^0-9A-Za-z_]+', '_', name or '').strip('_')
+              if not s:
+                  s = 'tab'
+              if s[0].isdigit():
+                  s = '_' + s
+              return s.lower()
+
+          used = set(['_meta'])
+          now = datetime.datetime.utcnow().isoformat(timespec='seconds') + 'Z'
+
+          for f in files:
+              ss_id = f['id']
+              ss_name = f.get('name', ss_id)
+              try:
+                  meta = sheets.spreadsheets().get(spreadsheetId=ss_id).execute()
+              except Exception as e:
+                  print(f'SKIP {ss_name}: cannot read metadata: {e}')
+                  continue
+              for sheet in meta.get('sheets', []):
+                  props = sheet.get('properties', {})
+                  tab_name = props.get('title', 'Sheet1')
+                  try:
+                      vals = sheets.spreadsheets().values().get(
+                          spreadsheetId=ss_id, range=tab_name
+                      ).execute().get('values', [])
+                  except Exception as e:
+                      print(f'SKIP {ss_name} / {tab_name}: {e}')
+                      continue
+
+                  base = sanitize(f'{ss_name}_{tab_name}')
+                  tname = base
+                  i = 1
+                  while tname in used:
+                      i += 1
+                      tname = f'{base}_{i}'
+                  used.add(tname)
+
+                  if not vals:
+                      cur.execute(f'CREATE TABLE "{tname}" (empty INTEGER)')
+                      cur.execute(
+                          'INSERT INTO _meta VALUES (?,?,?,?,?)',
+                          (ss_name, tab_name, tname, 0, now),
+                      )
+                      print(f'{ss_name} / {tab_name} -> {tname} (0 rows)')
+                      continue
+
+                  header = vals[0]
+                  data_rows = vals[1:]
+                  cols = []
+                  seen = set()
+                  for idx, h in enumerate(header):
+                      c = sanitize(str(h)) or f'col_{idx+1}'
+                      orig = c
+                      k = 1
+                      while c in seen:
+                          k += 1
+                          c = f'{orig}_{k}'
+                      seen.add(c)
+                      cols.append(c)
+
+                  col_defs = ', '.join(f'"{c}" TEXT' for c in cols)
+                  cur.execute(f'CREATE TABLE "{tname}" ({col_defs})')
+                  placeholders = ','.join(['?'] * len(cols))
+                  insert_sql = f'INSERT INTO "{tname}" VALUES ({placeholders})'
+                  for row in data_rows:
+                      padded = list(row) + [''] * (len(cols) - len(row))
+                      padded = [str(x) if x is not None else '' for x in padded[:len(cols)]]
+                      cur.execute(insert_sql, padded)
+                  cur.execute(
+                      'INSERT INTO _meta VALUES (?,?,?,?,?)',
+                      (ss_name, tab_name, tname, len(data_rows), now),
+                  )
+                  print(f'{ss_name} / {tab_name} -> {tname} ({len(data_rows)} rows)')
+
+          conn.commit()
+          conn.close()
+          print('Done.')
+          PY
+
+      - name: Commit sqlite back to branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add sheets_extract.sqlite3
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update sheets_extract.sqlite3 [skip ci]"
+            git pull --rebase origin test-gcp-sheets-workflow
+            git push origin HEAD:test-gcp-sheets-workflow
+          fi
