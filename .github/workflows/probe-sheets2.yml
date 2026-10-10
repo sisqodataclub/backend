@@ -10,27 +10,51 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
       - run: pip install google-auth requests
-      - name: Probe
+      - name: Drive list to artifact
         env:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          python - <<'PY'
-          import os, json
+          python - <<PYEOF
+          import json, os, sys
           from google.oauth2 import service_account
           from google.auth.transport.requests import AuthorizedSession
-          info = json.loads(os.environ['GCP_CREDENTIALS'])
-          creds = service_account.Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/spreadsheets.readonly'])
-          s = AuthorizedSession(creds)
-          sid = '1zEwnQkKA0Fk_hZnLDq0b6RoshfWARN54MywrR7pnZSo'
-          r = s.get(f'https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/\'chart\'!A1:F3')
-          print('CHART_A1F3', r.status_code, r.text)
-          r2 = s.get(f'https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/\'chart\'!A:Z')
-          j = r2.json()
-          vals = j.get('values', [])
-          print('CHART_ROWS', len(vals))
-          if vals:
-              print('HEADER', vals[0])
-              print('ROW1', vals[1] if len(vals)>1 else None)
-          PY
+          raw = os.environ.get("GCP_CREDENTIALS")
+          if not raw:
+              print("NO_CREDS"); sys.exit(2)
+          info = json.loads(raw)
+          creds = service_account.Credentials.from_service_account_info(
+              info, scopes=["https://www.googleapis.com/auth/drive.metadata.readonly"])
+          sess = AuthorizedSession(creds)
+          queries = [
+            "mimeType=\"application/vnd.google-apps.spreadsheet\" and trashed=false",
+            "mimeType=\"application/vnd.google-apps.spreadsheet\" and name contains \"Performance-on-Search\" and trashed=false",
+          ]
+          out = []
+          out.append("SA_EMAIL: " + str(info.get("client_email")))
+          for q in queries:
+              r = sess.get("https://www.googleapis.com/drive/v3/files",
+                  params={"pageSize":100, "fields":"files(id,name,mimeType,modifiedTime)",
+                          "q":q, "includeItemsFromAllDrives":"true",
+                          "supportsAllDrives":"true"})
+              out.append("=== QUERY: " + q)
+              out.append("STATUS: " + str(r.status_code))
+              try:
+                  body = r.json()
+              except Exception:
+                  out.append("BODY: " + r.text[:500]); continue
+              files = body.get("files", [])
+              out.append("COUNT: " + str(len(files)))
+              for f in files:
+                  out.append("  ID=" + f.get("id","") + "  NAME=" + f.get("name","") + "  MIME=" + f.get("mimeType",""))
+          text = chr(10).join(out)
+          with open("/tmp/drive_list.txt","w") as fh:
+              fh.write(text)
+          print(text)
+          PYEOF
+      - name: Upload list
+        uses: actions/upload-artifact@v4
+        with:
+          name: drive-list
+          path: /tmp/drive_list.txt
