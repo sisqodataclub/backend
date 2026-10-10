@@ -206,6 +206,17 @@ def determine_page_url(pages):
     return "Overall"
 
 
+def ensure_schema(conn):
+    """Create the chart table if it does not exist (fresh runner DB)."""
+    cur = conn.cursor()
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS chart ("
+        "date TEXT, clicks TEXT, impressions TEXT, ctr TEXT, "
+        "position TEXT, page_url TEXT)"
+    )
+    conn.commit()
+
+
 def ensure_page_url_column(conn):
     cur = conn.cursor()
     cur.execute("PRAGMA table_info(chart)")
@@ -254,6 +265,7 @@ def main():
     session = build_session()
     conn = sqlite3.connect(str(DB_PATH))
     try:
+        ensure_schema(conn)
         added = ensure_page_url_column(conn)
         if added:
             print("Migration: added page_url column to chart table.")
