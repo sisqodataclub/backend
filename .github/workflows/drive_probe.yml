@@ -1,4 +1,4 @@
-name: Drive probe 2 (discovery)
+name: Drive probe 3 (summary)
 on:
   workflow_dispatch:
 permissions:
@@ -23,18 +23,34 @@ raw = os.environ.get("GCP_CREDENTIALS")
 if not raw:
     print("NO_CREDS"); sys.exit(2)
 info = json.loads(raw)
-print("SA_EMAIL:", info.get("client_email"))
-creds = service_account.Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
+lines = []
+lines.append("SA_EMAIL: " + str(info.get("client_email")))
+creds = service_account.Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive.metadata.readonly"])
 sess = AuthorizedSession(creds)
 queries = [
-  "name contains 'Performance-on-Search'",
-  "mimeType='application/vnd.google-apps.spreadsheet' and name contains 'Performance-on-Search'",
-  "mimeType='application/vnd.google-apps.spreadsheet'",
+  ("spreadsheets_all", "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false"),
+  ("name_perf", "mimeType='application/vnd.google-apps.spreadsheet' and name contains 'Performance-on-Search' and trashed=false"),
 ]
-for q in queries:
-    r = sess.get("https://www.googleapis.com/drive/v3/files", params={"pageSize":50, "fields":"files(id,name,mimeType,owners(emailAddress),modifiedTime)", "q":q, "includeItemsFromAllDrives":"true", "supportsAllDrives":"true"})
-    print("QUERY:", q)
-    print("STATUS:", r.status_code)
-    print("BODY:", r.text[:3000])
-    print("---")
+for label, q in queries:
+    r = sess.get("https://www.googleapis.com/drive/v3/files", params={"pageSize":100, "fields":"files(id,name,mimeType,owners(emailAddress),modifiedTime)", "q":q, "includeItemsFromAllDrives":"true", "supportsAllDrives":"true"})
+    lines.append("=== QUERY: " + label + " ===")
+    lines.append("STATUS: " + str(r.status_code))
+    if r.status_code == 200:
+        files = r.json().get("files", [])
+        lines.append("COUNT: " + str(len(files)))
+        for f in files:
+            lines.append("FILE|%s|%s|%s" % (f.get("id"), f.get("name"), f.get("mimeType")))
+    else:
+        lines.append("BODY: " + r.text[:500])
+    lines.append("")
+out = "\n".join(lines)
+with open("drive_probe_result.txt","w") as fh:
+    fh.write(out)
+print(out)
+with open(os.environ["GITHUB_STEP_SUMMARY"],"a") as fh:
+    fh.write("\n" + out + "\n\n")
 PYEOF
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drive-probe-result
+          path: drive_probe_result.txt
