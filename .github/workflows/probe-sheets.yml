@@ -1,0 +1,32 @@
+name: Probe Sheets
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install google-auth requests
+      - name: Probe
+        env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+        run: |
+          python - <<'PY'
+          import os, json, requests
+          from google.oauth2 import service_account
+          from google.auth.transport.requests import AuthorizedSession
+          info = json.loads(os.environ['GCP_CREDENTIALS'])
+          creds = service_account.Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/spreadsheets.readonly'])
+          s = AuthorizedSession(creds)
+          sid = '1zEwnQkKA0Fk_hZnLDq0b6RoshfWARN54MywrR7pnZSo'
+          r = s.get(f'https://sheets.googleapis.com/v4/spreadsheets/{sid}', params={'fields':'properties.title,sheets.properties.title'})
+          print('META', r.status_code, r.text[:800])
+          for tab in ['chart','pages','Sheet1']:
+              r2 = s.get(f'https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/\'{tab}\'!A1:F5')
+              print('TAB', tab, r2.status_code, r2.text[:500])
+          PY
