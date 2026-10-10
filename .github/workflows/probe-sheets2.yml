@@ -1,0 +1,36 @@
+name: Probe Sheets 2
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install google-auth requests
+      - name: Probe
+        env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+        run: |
+          python - <<'PY'
+          import os, json
+          from google.oauth2 import service_account
+          from google.auth.transport.requests import AuthorizedSession
+          info = json.loads(os.environ['GCP_CREDENTIALS'])
+          creds = service_account.Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/spreadsheets.readonly'])
+          s = AuthorizedSession(creds)
+          sid = '1zEwnQkKA0Fk_hZnLDq0b6RoshfWARN54MywrR7pnZSo'
+          r = s.get(f'https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/\'chart\'!A1:F3')
+          print('CHART_A1F3', r.status_code, r.text)
+          r2 = s.get(f'https://sheets.googleapis.com/v4/spreadsheets/{sid}/values/\'chart\'!A:Z')
+          j = r2.json()
+          vals = j.get('values', [])
+          print('CHART_ROWS', len(vals))
+          if vals:
+              print('HEADER', vals[0])
+              print('ROW1', vals[1] if len(vals)>1 else None)
+          PY
