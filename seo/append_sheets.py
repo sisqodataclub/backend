@@ -165,7 +165,19 @@ def determine_page_url(pages):
     return "Overall"
 
 
+def ensure_chart_table(conn):
+    """Create the chart table if it does not exist (fresh checkout / CI)."""
+    cur = conn.cursor()
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS chart ("
+        "date TEXT, clicks TEXT, impressions TEXT, ctr TEXT, "
+        "position TEXT, page_url TEXT)"
+    )
+    conn.commit()
+
+
 def ensure_page_url_column(conn):
+    ensure_chart_table(conn)
     cur = conn.cursor()
     cur.execute("PRAGMA table_info(chart)")
     cols = [row[1] for row in cur.fetchall()]
