@@ -1,0 +1,6 @@
+# Monthly GSC Google Sheet IDs
+# One sheet id per line. Append a new line each month after you export
+# the month's GSC data to a new Google Sheet and share it with the service account.
+# Format: <YYYY-MM> <sheet_id>
+
+2026-07 1zEwnQkKA0Fk_hZnLDq0b6RoshfWARN54MywrR7pnZSo
