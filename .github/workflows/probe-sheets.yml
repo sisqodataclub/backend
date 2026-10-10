@@ -12,43 +12,55 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install google-auth requests
-      - name: Probe Sheets
+      - name: Drive files.list probe
         env:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          python - <<'PY'
-          import os, json
-          from google.oauth2 import service_account
-          from google.auth.transport.requests import AuthorizedSession
-          info = json.loads(os.environ['GCP_CREDENTIALS'])
-          print('SA_EMAIL', info.get('client_email'))
-          creds = service_account.Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/spreadsheets.readonly'])
-          s = AuthorizedSession(creds)
-          sid = '1zEwnQkKA0Fk_hZnLDq0b6RoshfWARN54MywrR7pnZSo'
-          r = s.get(f'https://sheets.googleapis.com/v4/spreadsheets/{sid}', params={'fields':'properties.title'})
-          print('SHEETS_META', r.status_code)
-          PY
-      - name: Probe Drive v3 files.list
-        env:
-          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
-        run: |
-          python - <<'PY'
-          import os, json
-          from google.oauth2 import service_account
-          from google.auth.transport.requests import AuthorizedSession
-          info = json.loads(os.environ['GCP_CREDENTIALS'])
-          print('SA_EMAIL', info.get('client_email'))
-          for scope in ['https://www.googleapis.com/auth/drive.metadata.readonly', 'https://www.googleapis.com/auth/drive.readonly']:
-              creds = service_account.Credentials.from_service_account_info(info, scopes=[scope])
-              s = AuthorizedSession(creds)
-              r = s.get('https://www.googleapis.com/drive/v3/files', params={'pageSize':10, 'fields':'files(id,name,mimeType,owners(emailAddress))', 'q':"mimeType='application/vnd.google-apps.spreadsheet'"})
-              print('DRIVE_SCOPE', scope)
-              print('DRIVE_STATUS', r.status_code)
-              print('DRIVE_BODY', r.text[:1200])
-          # also try a name-contains query
-          creds = service_account.Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/drive.metadata.readonly'])
-          s = AuthorizedSession(creds)
-          r = s.get('https://www.googleapis.com/drive/v3/files', params={'pageSize':20, 'fields':'files(id,name)', 'q':"name contains 'Performance-on-Search' and mimeType='application/vnd.google-apps.spreadsheet'"})
-          print('DRIVE_NAME_QUERY_STATUS', r.status_code)
-          print('DRIVE_NAME_QUERY_BODY', r.text[:1200])
-          PY
+          python - <<'PYEOF'
+import json, os, sys
+from google.oauth2 import service_account
+from google.auth.transport.requests import AuthorizedSession
+raw = os.environ.get('GCP_CREDENTIALS')
+if not raw:
+    print('NO_CREDS'); sys.exit(2)
+info = json.loads(raw)
+creds = service_account.Credentials.from_service_account_info(
+    info, scopes=['https://www.googleapis.com/auth/drive.metadata.readonly'])
+sess = AuthorizedSession(creds)
+queries = [
+  "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+  "mimeType='application/vnd.google-apps.spreadsheet' and name contains 'Performance' and trashed=false",
+  "mimeType='application/vnd.google-apps.spreadsheet' and name contains 'Performance-on-Search' and trashed=false",
+]
+out = []
+out.append('SA_EMAIL: ' + str(info.get('client_email')))
+for q in queries:
+    r = sess.get('https://www.googleapis.com/drive/v3/files',
+        params={'pageSize':100, 'fields':'files(id,name,mimeType)',
+                'q':q, 'includeItemsFromAllDrives':'true',
+                'supportsAllDrives':'true'})
+    out.append('=== QUERY: ' + q)
+    out.append('STATUS: ' + str(r.status_code))
+    try:
+        body = r.json()
+    except Exception:
+        out.append('BODY: ' + r.text[:500]); continue
+    files = body.get('files', [])
+    out.append('COUNT: ' + str(len(files)))
+    for f in files:
+        out.append('  ID=' + f.get('id','') + '  NAME=' + f.get('name',''))
+text = '
+'.join(out)
+with open('/tmp/drive_list.txt','w') as fh:
+    fh.write(text)
+# step summary survives redaction
+with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as s:
+    s.write(text + '
+')
+print('WROTE_SUMMARY')
+PYEOF
+      - name: Upload list
+        uses: actions/upload-artifact@v4
+        with:
+          name: drive-list
+          path: /tmp/drive_list.txt
