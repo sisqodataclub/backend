@@ -12,7 +12,7 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install google-auth requests
-      - name: Probe
+      - name: Probe Sheets
         env:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
@@ -21,13 +21,34 @@ jobs:
           from google.oauth2 import service_account
           from google.auth.transport.requests import AuthorizedSession
           info = json.loads(os.environ['GCP_CREDENTIALS'])
-          print('SA_EMAIL:', info.get('client_email'))
+          print('SA_EMAIL', info.get('client_email'))
+          creds = service_account.Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/spreadsheets.readonly'])
+          s = AuthorizedSession(creds)
+          sid = '1zEwnQkKA0Fk_hZnLDq0b6RoshfWARN54MywrR7pnZSo'
+          r = s.get(f'https://sheets.googleapis.com/v4/spreadsheets/{sid}', params={'fields':'properties.title'})
+          print('SHEETS_META', r.status_code)
+          PY
+      - name: Probe Drive v3 files.list
+        env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+        run: |
+          python - <<'PY'
+          import os, json
+          from google.oauth2 import service_account
+          from google.auth.transport.requests import AuthorizedSession
+          info = json.loads(os.environ['GCP_CREDENTIALS'])
+          print('SA_EMAIL', info.get('client_email'))
+          for scope in ['https://www.googleapis.com/auth/drive.metadata.readonly', 'https://www.googleapis.com/auth/drive.readonly']:
+              creds = service_account.Credentials.from_service_account_info(info, scopes=[scope])
+              s = AuthorizedSession(creds)
+              r = s.get('https://www.googleapis.com/drive/v3/files', params={'pageSize':10, 'fields':'files(id,name,mimeType,owners(emailAddress))', 'q':"mimeType='application/vnd.google-apps.spreadsheet'"})
+              print('DRIVE_SCOPE', scope)
+              print('DRIVE_STATUS', r.status_code)
+              print('DRIVE_BODY', r.text[:1200])
+          # also try a name-contains query
           creds = service_account.Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/drive.metadata.readonly'])
           s = AuthorizedSession(creds)
-          r = s.get('https://www.googleapis.com/drive/v3/files', params={'pageSize':10,'fields':'files(id,name,mimeType)','q':"mimeType='application/vnd.google-apps.spreadsheet'"})
-          print('DRIVE_STATUS:', r.status_code)
-          print('DRIVE_BODY:', r.text[:1500])
-          r2 = s.get('https://www.googleapis.com/drive/v3/files', params={'pageSize':10,'fields':'files(id,name)','q':"name contains 'Performance-on-Search'"})
-          print('Q_STATUS:', r2.status_code)
-          print('Q_BODY:', r2.text[:1500])
+          r = s.get('https://www.googleapis.com/drive/v3/files', params={'pageSize':20, 'fields':'files(id,name)', 'q':"name contains 'Performance-on-Search' and mimeType='application/vnd.google-apps.spreadsheet'"})
+          print('DRIVE_NAME_QUERY_STATUS', r.status_code)
+          print('DRIVE_NAME_QUERY_BODY', r.text[:1200])
           PY
