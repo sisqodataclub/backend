@@ -1,0 +1,37 @@
+name: Append Sheets -> SQLite
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  append-sheets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install google-auth requests
+
+      - name: Run append_sheets.py
+        env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+        run: |
+          python seo/append_sheets.py
+
+      - name: Upload SQLite DB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sheets-extract-db
+          path: seo/sheets_extract.sqlite3
+          if-no-files-found: warn
