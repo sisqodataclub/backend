@@ -1,0 +1,34 @@
+name: Drive probe (one-off)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install google-auth requests
+      - env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+        run: |
+          python - <<'PYEOF'
+import json, os, sys
+from google.oauth2 import service_account
+from google.auth.transport.requests import AuthorizedSession
+raw = os.environ.get("GCP_CREDENTIALS")
+if not raw:
+    print("NO_CREDS"); sys.exit(2)
+info = json.loads(raw)
+print("SA_EMAIL:", info.get("client_email"))
+for scope in ["https://www.googleapis.com/auth/drive.metadata.readonly", "https://www.googleapis.com/auth/drive.readonly"]:
+    creds = service_account.Credentials.from_service_account_info(info, scopes=[scope])
+    sess = AuthorizedSession(creds)
+    r = sess.get("https://www.googleapis.com/drive/v3/files", params={"pageSize":5, "fields":"files(id,name,mimeType)", "q":"mimeType='application/vnd.google-apps.spreadsheet'"})
+    print("SCOPE:", scope)
+    print("STATUS:", r.status_code)
+    print("BODY:", r.text[:800])
+PYEOF
