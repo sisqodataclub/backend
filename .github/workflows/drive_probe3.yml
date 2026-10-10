@@ -1,3 +1,4 @@
+# probe v3 - re-registered 2026-10-10
 name: Drive probe 3 (list all spreadsheets)
 on:
   workflow_dispatch:
