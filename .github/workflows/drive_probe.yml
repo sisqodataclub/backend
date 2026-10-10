@@ -1,6 +1,9 @@
-name: Drive probe
+name: Drive probe 3 (artifact)
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/drive_probe.yml'
 permissions:
   contents: read
 jobs:
@@ -10,55 +13,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
       - run: pip install google-auth requests
       - env:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
-        run: |
-          python - <<"PYEOF"
-          import json, os, sys
-          from google.oauth2 import service_account
-          from google.auth.transport.requests import AuthorizedSession
-          raw = os.environ.get("GCP_CREDENTIALS")
-          if not raw:
-              print("NO_CREDS"); sys.exit(2)
-          info = json.loads(raw)
-          creds = service_account.Credentials.from_service_account_info(
-              info, scopes=["https://www.googleapis.com/auth/drive.metadata.readonly"])
-          sess = AuthorizedSession(creds)
-          queries = [
-            "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
-            "mimeType='application/vnd.google-apps.spreadsheet' and name contains 'Performance' and trashed=false",
-            "mimeType='application/vnd.google-apps.spreadsheet' and name contains 'Performance-on-Search' and trashed=false",
-          ]
-          out = []
-          for q in queries:
-              r = sess.get("https://www.googleapis.com/drive/v3/files", params={
-                  "pageSize": 100,
-                  "fields": "files(id,name,mimeType,modifiedTime)",
-                  "q": q,
-                  "includeItemsFromAllDrives": "true",
-                  "supportsAllDrives": "true",
-              })
-              rec = {"query": q, "status": r.status_code, "files": []}
-              try:
-                  rec["files"] = r.json().get("files", [])
-              except Exception as e:
-                  rec["error"] = str(e)
-              out.append(rec)
-          with open("drive_files.json", "w") as f:
-              json.dump(out, f, indent=2)
-          summary = os.environ.get("GITHUB_STEP_SUMMARY")
-          if summary:
-              with open(summary, "a") as s:
-                  for rec in out:
-                      s.write("## Query: %s\n" % rec["query"])
-                      s.write("Status: %s  Files: %d\n" % (rec["status"], len(rec["files"])))
-                      for f_ in rec["files"]:
-                          s.write("- %s | %s | %s\n" % (f_["id"], f_["name"], f_["mimeType"]))
-                      s.write("\n")
-          PYEOF
-      - uses: actions/upload-artifact@v4
+        run: python seo/drive_probe.py
+      - if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: drive-files
           path: drive_files.json
