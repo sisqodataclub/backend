@@ -16,32 +16,30 @@ jobs:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
           python - <<'PYEOF'
-import json, os, sys
+import json, os
 from google.oauth2 import service_account
 from google.auth.transport.requests import AuthorizedSession
-raw = os.environ.get("GCP_CREDENTIALS")
-if not raw:
-    print("NO_CREDS"); sys.exit(2)
-info = json.loads(raw)
+info = json.loads(os.environ["GCP_CREDENTIALS"])
 print("SA_EMAIL:", info.get("client_email"))
 creds = service_account.Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
 sess = AuthorizedSession(creds)
 queries = [
-    "mimeType='application/vnd.google-apps.spreadsheet'",
-    "name contains 'Performance-on-Search'",
-    "name contains 'Performance on Search'",
-    "name contains 'GSC'",
+  "mimeType='application/vnd.google-apps.spreadsheet'",
+  "name contains 'Performance-on-Search'",
+  "name contains 'Performance on Search'",
+  "name contains 'Search'",
+  "fullText contains 'Performance-on-Search'",
 ]
 for q in queries:
-    r = sess.get("https://www.googleapis.com/drive/v3/files", params={"pageSize":50, "fields":"files(id,name,mimeType)", "q":q})
-    print("QUERY:", q)
+    r = sess.get("https://www.googleapis.com/drive/v3/files", params={"pageSize":50,"fields":"files(id,name,mimeType,owners(emailAddress))","q":q,"supportsAllDrives":"true","includeItemsFromAllDrives":"true"})
+    print("=== QUERY:", q)
     print("STATUS:", r.status_code)
     try:
-        j = r.json()
-        files = j.get("files", [])
+        j=r.json()
+        files=j.get("files",[])
         print("COUNT:", len(files))
-        for f in files:
-            print("  FILE:", repr(f.get("name")), f.get("id"))
+        for f in files[:10]:
+            print(" FILE:", f.get("id"), "|", f.get("name"))
     except Exception as e:
-        print("ERR:", e, r.text[:300])
+        print("BODY:", r.text[:500])
 PYEOF
