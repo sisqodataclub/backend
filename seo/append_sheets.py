@@ -233,6 +233,8 @@ def main():
         return
 
     conn = sqlite3.connect(DB_PATH)
+    conn.execute('CREATE TABLE IF NOT EXISTS chart (date TEXT, clicks INTEGER, impressions INTEGER, ctr REAL, position REAL, page_url TEXT)')  # table-creation step
+    conn.commit()
     try:
         ensure_page_url_column(conn)
         seen = existing_keys(conn)
