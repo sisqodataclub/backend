@@ -15,20 +15,33 @@ jobs:
       - env:
           GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
         run: |
-          python - <<'PY'
-          import json, os, sys
-          from google.oauth2 import service_account
-          from google.auth.transport.requests import AuthorizedSession
-          raw = os.environ.get("GCP_CREDENTIALS")
-          if not raw:
-              print("NO_CREDS"); sys.exit(2)
-          info = json.loads(raw)
-          print("SA_EMAIL:", info.get("client_email"))
-          for scope in ["https://www.googleapis.com/auth/drive.metadata.readonly", "https://www.googleapis.com/auth/drive.readonly"]:
-              creds = service_account.Credentials.from_service_account_info(info, scopes=[scope])
-              sess = AuthorizedSession(creds)
-              r = sess.get("https://www.googleapis.com/drive/v3/files", params={"pageSize":5, "fields":"files(id,name,mimeType)", "q":"mimeType='application/vnd.google-apps.spreadsheet'"})
-              print("SCOPE:", scope)
-              print("STATUS:", r.status_code)
-              print("BODY:", r.text[:800])
-          PY
+          python - <<'PYEOF'
+import json, os, sys
+from google.oauth2 import service_account
+from google.auth.transport.requests import AuthorizedSession
+raw = os.environ.get("GCP_CREDENTIALS")
+if not raw:
+    print("NO_CREDS"); sys.exit(2)
+info = json.loads(raw)
+print("SA_EMAIL:", info.get("client_email"))
+creds = service_account.Credentials.from_service_account_info(info, scopes=["https://www.googleapis.com/auth/drive.readonly"])
+sess = AuthorizedSession(creds)
+queries = [
+    "mimeType='application/vnd.google-apps.spreadsheet'",
+    "name contains 'Performance-on-Search'",
+    "name contains 'Performance on Search'",
+    "name contains 'GSC'",
+]
+for q in queries:
+    r = sess.get("https://www.googleapis.com/drive/v3/files", params={"pageSize":50, "fields":"files(id,name,mimeType)", "q":q})
+    print("QUERY:", q)
+    print("STATUS:", r.status_code)
+    try:
+        j = r.json()
+        files = j.get("files", [])
+        print("COUNT:", len(files))
+        for f in files:
+            print("  FILE:", repr(f.get("name")), f.get("id"))
+    except Exception as e:
+        print("ERR:", e, r.text[:300])
+PYEOF
