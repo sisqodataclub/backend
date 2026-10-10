@@ -1,0 +1,62 @@
+name: Drive probe 3 (list all spreadsheets)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install google-auth requests
+      - name: Probe Drive
+        env:
+          GCP_CREDENTIALS: ${{ secrets.GCP_CREDENTIALS }}
+        run: |
+          python - <<'PYEOF'
+import json, os, sys
+from google.oauth2 import service_account
+from google.auth.transport.requests import AuthorizedSession
+raw = os.environ.get('GCP_CREDENTIALS')
+if not raw:
+    print('NO_CREDS'); sys.exit(2)
+info = json.loads(raw)
+creds = service_account.Credentials.from_service_account_info(
+    info, scopes=['https://www.googleapis.com/auth/drive.metadata.readonly'])
+sess = AuthorizedSession(creds)
+queries = [
+  "mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+  "mimeType='application/vnd.google-apps.spreadsheet' and name contains 'Performance' and trashed=false",
+  "mimeType='application/vnd.google-apps.spreadsheet' and name contains 'Search' and trashed=false",
+]
+out = []
+out.append('SA_EMAIL: ' + str(info.get('client_email')))
+for q in queries:
+    r = sess.get('https://www.googleapis.com/drive/v3/files',
+        params={'pageSize':100, 'fields':'files(id,name,mimeType,modifiedTime)',
+                'q':q, 'includeItemsFromAllDrives':'true',
+                'supportsAllDrives':'true'})
+    out.append('=== QUERY: ' + q)
+    out.append('STATUS: ' + str(r.status_code))
+    try:
+        body = r.json()
+    except Exception:
+        out.append('BODY: ' + r.text[:500]); continue
+    files = body.get('files', [])
+    out.append('COUNT: ' + str(len(files)))
+    for f in files:
+        out.append('  ID=' + f.get('id','') + '  NAME=' + f.get('name','') + '  MIME=' + f.get('mimeType',''))
+text = '
+'.join(out)
+with open('/tmp/drive_list.txt','w') as fh:
+    fh.write(text)
+print(text)
+PYEOF
+      - name: Upload list
+        uses: actions/upload-artifact@v4
+        with:
+          name: drive-list
+          path: /tmp/drive_list.txt
