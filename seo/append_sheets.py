@@ -197,30 +197,133 @@ def existing_keys(conn):
     return {(r[0], r[1]) for r in cur.fetchall()}
 
 
-def insert_rows(conn, rows, page_url, seen):
-    """Insert chart rows for one sheet, skipping (date, page_url) dupes."""
+# Declared chart schema column order (must match ensure_chart_table).
+CHART_COLUMNS = ["date", "clicks", "impressions", "ctr", "position",
+                 "page_url"]
+
+# Aliases seen in Performance-on-Search sheets -> declared column names.
+_HEADER_ALIASES = {
+    "date": "date",
+    "day": "date",
+    "clicks": "clicks",
+    "impressions": "impressions",
+    "impr": "impressions",
+    "impressions_total": "impressions",
+    "ctr": "ctr",
+    "ctr_pct": "ctr",
+    "position": "position",
+    "avg_position": "position",
+    "avg_pos": "position",
+    "page_url": "page_url",
+    "page": "page_url",
+    "url": "page_url",
+}
+
+
+def _normalize_header(name):
+    """Map a sheet header cell to a declared chart column, or None."""
+    key = str(name).strip().lower().replace(" ", "_")
+    return _HEADER_ALIASES.get(key)
+
+
+def _build_header_map(header):
+    """Return {declared_col: index_in_row} from a sheet header row.
+
+    Returns None if the header doesn't cover at least date + one metric,
+    so callers can fall back to positional mapping.
+    """
+    if not header:
+        return None
+    mapping = {}
+    for idx, cell in enumerate(header):
+        col = _normalize_header(cell)
+        if col and col not in mapping:
+            mapping[col] = idx
+    if "date" not in mapping:
+        return None
+    if not any(c in mapping for c in ("clicks", "impressions", "ctr",
+                                      "position")):
+        return None
+    return mapping
+
+
+def _extract_row(row, header_map):
+    """Build a dict of declared chart columns for one sheet row.
+
+    Uses header_map when available; otherwise falls back to positional
+    mapping against CHART_COLUMNS (row[0]=date, row[1]=clicks, ...).
+    """
+    out = {c: None for c in CHART_COLUMNS}
+    if header_map:
+        for col, idx in header_map.items():
+            if idx < len(row):
+                out[col] = row[idx]
+    else:
+        # Positional fallback: date, clicks, impressions, ctr, position.
+        positional = ["date", "clicks", "impressions", "ctr",
+                      "position"]
+        for i, col in enumerate(positional):
+            if i < len(row):
+                out[col] = row[i]
+    return out
+
+
+
+
+def _to_int(v):
+    try:
+        return int(float(str(v).replace(",", "").strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def _to_float(v):
+    try:
+        return float(str(v).replace("%", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def insert_rows(conn, rows, page_url, seen, header=None):
+    """Insert chart rows for one sheet, skipping (date, page_url) dupes.
+
+    Values are mapped to the declared chart columns (date, clicks,
+    impressions, ctr, position, page_url). When a header row is supplied
+    we map by header name; otherwise we map positionally against the
+    declared schema. No dynamic c0/c1 column names are ever generated.
+    """
+    header_map = _build_header_map(header)
     inserted = 0
     skipped = 0
     for row in rows:
         if not row:
             continue
-        date = str(row[0]).strip()
+        mapped = _extract_row(row, header_map)
+        date = str(mapped.get("date") or "").strip()
         if not date:
             continue
         key = (date, page_url)
         if key in seen:
             skipped += 1
             continue
-        # Remaining columns after date are stored as-is.
-        values = row[1:] if len(row) > 1 else []
-        cols = ["date", "page_url"] + [f"c{i}" for i in range(len(values))]
-        placeholders = ",".join(["?"] * len(cols))
-        conn.execute(
-            f"INSERT INTO chart ({','.join(cols)}) VALUES ({placeholders})",
-            [date, page_url, *values],
-        )
-        seen.add(key)
-        inserted += 1
+        try:
+            conn.execute(
+                "INSERT INTO chart (date, clicks, impressions, ctr, "
+                "position, page_url) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    date,
+                    _to_int(mapped.get("clicks")),
+                    _to_int(mapped.get("impressions")),
+                    _to_float(mapped.get("ctr")),
+                    _to_float(mapped.get("position")),
+                    page_url,
+                ),
+            )
+            seen.add(key)
+            inserted += 1
+        except sqlite3.Error as e:
+            print(f"[db] insert failed for {key}: {e}", file=sys.stderr)
+            skipped += 1
     conn.commit()
     return inserted, skipped
 
@@ -242,9 +345,10 @@ def main():
         for sid in sheet_ids:
             page_url = page_url_for_sheet(session, sid)
             rows = fetch_values(session, sid, "chart")
+            header = rows[0] if rows else None
             body = rows[1:] if rows else []
             total_read += len(body)
-            ins, skp = insert_rows(conn, body, page_url, seen)
+            ins, skp = insert_rows(conn, body, page_url, seen, header=header)
             total_inserted += ins
             total_skipped += skp
             print(
