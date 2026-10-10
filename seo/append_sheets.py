@@ -29,6 +29,7 @@ Credentials resolution order (env var FIRST, file only for local dev):
 import json
 import os
 import sqlite3
+import sys
 from pathlib import Path
 
 from google.auth.transport.requests import AuthorizedSession
